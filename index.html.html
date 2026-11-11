@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Смайлик</title>
+<style>
+:root{color-scheme:dark;--bg:#05070a;--glow:#8ffaff;box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+canvas{display:block;width:100%;height:100%}
+#go{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:none;color:var(--glow);border:1px solid var(--glow);border-radius:999px;padding:14px 34px;font:18px system-ui,sans-serif;letter-spacing:.08em;box-shadow:0 0 18px #5ff5ff55,inset 0 0 12px #5ff5ff33;text-shadow:0 0 10px #5ff5ff}
+#v{position:fixed;width:1px;height:1px;opacity:0;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<button id="go">Разбудить</button>
+<video id="v" playsinline muted></video>
+<script type="module">
+import {FilesetResolver,HandLandmarker,FaceLandmarker} from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+
+const cv=document.getElementById('c'),g=cv.getContext('2d'),vid=document.getElementById('v'),goBtn=document.getElementById('go');
+let W,H,U;
+function fit(){const d=devicePixelRatio||1;W=innerWidth;H=innerHeight;cv.width=W*d;cv.height=H*d;g.setTransform(d,0,0,d,0,0);U=Math.min(W,H*.7)}
+addEventListener('resize',fit);fit();
+const rnd=Math.random;
+
+/* ---------- эмоции: поверх BASE ---------- */
+const BASE={curve:.5,open:0,eye:1,brow:0,lift:0,w:1,shake:0,lidL:1,lidR:1,tilt:0,ox:0,oy:0,sc:1,a:1,ma:1};
+const E={
+  happy:{curve:.8}, calm:{curve:.35,eye:.85},
+  curious:{curve:.15,eye:1.1,lift:.5,lidR:.82,tilt:.08},
+  wow:{curve:0,open:1,eye:1.35,lift:1,w:.5},
+  scared:{curve:-.2,open:.45,eye:1.3,brow:-1,lift:1,w:.8,shake:1},
+  terror:{curve:-.3,open:1,eye:1.55,brow:-1,lift:1.3,w:.9,shake:1.8},
+  angry:{curve:-.25,eye:.7,brow:1,lift:-.3,w:.9},
+  purr:{curve:.9,eye:.07,lift:-.2,w:1.05},
+  displeased:{curve:-.4,eye:.55,brow:1,lift:-.2,w:.7},
+  shy:{curve:.3,eye:.6,lift:-.1,w:.5,tilt:-.1,oy:.02},
+  drowsy:{curve:0,eye:.35,lift:-.2,w:.6},
+  sleep:{curve:.1,eye:.06,lift:-.2,w:.5,oy:.07}
+};
+const cur={...BASE},tgt={...BASE};
+function S(n,o){Object.assign(tgt,BASE,E[n],o||{})}
+
+/* ---------- состояния и приоритеты (меньше = сильнее) ---------- */
+const P={exit:4,panic:1,hide:1,wake:2,startle:3,peek:3,wary:4,wave:4,clap:5,dance:5,awake:7,drowsy:8,sleep:8};
+let now=0,st='awake',st0=0,stDur=0,stArg={};
+function go(n,dur=0,arg={},force=false){
+  if(n===st&&!force){if(dur)stDur=Math.max(stDur,now-st0+dur);return true}
+  if(!force&&P[n]>P[st])return false;
+  st=n;st0=now;stDur=dur;stArg=arg;
+  if(n!=='awake')purrOff();
+  return true;
+}
+
+/* ---------- память и характер (только в рамках сеанса) ---------- */
+let courage=.5,clapLike=.3,petLike=.3;
+
+/* ---------- восприятие ---------- */
+let camOK=false,micOK=false,hand=null,face=null,handSeen=-1e9,faceSeen=-1e9;
+let ssz=0,handHist=[],tipHist=[],swipeN=0,swipeDir=1,lastSwipe=-1e9;
+let handLM=null,faceLM=null,detTick=0,lastDet=0;
+const handFresh=()=>now-handSeen<900, faceFresh=()=>now-faceSeen<900;
+const handNear=()=>handFresh()&&hand.sz>.22;
+
+function onHand(L){
+  const rawSz=Math.hypot(L[0].x-L[9].x,L[0].y-L[9].y);
+  const sz=ssz&&now-handSeen<900?ssz*.6+rawSz*.4:rawSz;ssz=sz;
+  const tip=L[8];
+  handHist.push({t:now,sz});while(handHist.length&&now-handHist[0].t>400)handHist.shift();
+  tipHist.push({t:now,x:tip.x,y:tip.y});while(tipHist.length&&now-tipHist[0].t>1000)tipHist.shift();
+  let r=1;
+  if(handHist.length>1){const a=handHist[0];if(now-a.t>200)r=sz/Math.max(a.sz,.02)}
+  let motion=0;for(let i=1;i<tipHist.length;i++)motion+=Math.abs(tipHist[i].x-tipHist[i-1].x)+Math.abs(tipHist[i].y-tipHist[i-1].y);
+  const px=hand&&now-handSeen<900?hand.x*.5+tip.x*.5:tip.x,py=hand&&now-handSeen<900?hand.y*.5+tip.y*.5:tip.y;
+  hand={x:px,y:py,sz,v:r,motion};handSeen=now;
+
+  const sleeping=st==='sleep'||st==='drowsy';
+  const k=1+(.5-courage)*.6;
+  // резкое приближение: сила реакции зависит от размера и скорости руки
+  if(st!=='hide'&&st!=='panic'&&((sz>.30&&r>1+1.2/k)||(sz>.45&&r>1+.5/k))){
+    courage=Math.max(0,courage-.12);
+    go('panic',1300,{v:Math.floor(rnd()*3),side:hand.x<.5?1:-1});return;
+  }
+  if(sleeping){
+    // медленное осторожное приближение с движением = пробуждение
+    if(hand.motion>.25&&sz>.1&&r<1.35)go('wake',6500);
+    return;
+  }
+  if(sz>.2&&r>1+.55/k&&st!=='hide'&&st!=='panic'&&st!=='exit')go('wary',2000,{side:hand.x<.5?1:-1});
+  
+  // палец указывает в сторону: существо уходит за край экрана
+  const ext=(a,b,c)=>Math.hypot(L[a].x-L[c].x,L[a].y-L[c].y)>Math.hypot(L[b].x-L[c].x,L[b].y-L[c].y)*1.15;
+  const dxp=L[8].x-L[5].x,dyp=L[8].y-L[5].y;
+  const pointing=ext(8,6,0)&&!ext(12,10,0)&&!ext(16,14,0)&&Math.abs(dxp)>Math.abs(dyp)*2&&Math.hypot(dxp,dyp)>.05;
+  if(pointing){if(!pt0)pt0=now;if(now-pt0>700&&(st==='awake'||st==='wave'||st==='clap'))go('exit',6800,{d:dxp>0?-1:1})}else pt0=0;
+  // взмахи в одну сторону
+  if(tipHist.length>2){
+    const f=tipHist.find(q=>now-q.t<450)||tipHist[0],dx=tip.x-f.x;
+    if(Math.abs(dx)>.28&&Math.abs(tip.y-f.y)<Math.abs(dx)*.5&&now-lastSwipe>500&&st!=='exit'){
+      if(now-lastSwipe>3500)swipeN=0;
+      swipeN++;swipeDir=dx>0?-1:1;lastSwipe=now;tipHist=[];
+      go('wave',3200);askSnd();
+    }
+  }
+}
+function onFace(L){
+  const n=L[1];
+  const roll=Math.atan2(L[263].y-L[33].y,L[263].x-L[33].x);
+  const yaw=(n.x-(L[234].x+L[454].x)/2)/Math.max(.01,Math.abs(L[454].x-L[234].x));
+  face={gx:(.5-n.x)*2,gy:(n.y-.5)*1.6,roll,yaw};faceSeen=now;
+}
+
+/* ---------- звук: синтез + микрофон ---------- */
+let ac=null,an=null,abuf=null,selfMute=0,lastEmo='happy',lastSnd=0;
+function unlock(){
+  if(!ac){try{ac=new (window.AudioContext||window.webkitAudioContext)()}catch(e){return}}
+  try{if(navigator.audioSession)navigator.audioSession.type='play-and-record'}catch(e){}
+  if(ac.state==='suspended')ac.resume();
+}
+let mst=null;
+function master(){if(!mst){const c=ac.createDynamicsCompressor(),m=ac.createGain();m.gain.value=2.6;m.connect(c);c.connect(ac.destination);mst=m}return mst}
+function tone(f1,f2,dur,type,vol,vib){
+  if(!ac||ac.state!=='running')return;
+  const o=ac.createOscillator(),gn=ac.createGain(),t=ac.currentTime;
+  selfMute=Math.max(selfMute,now+dur*1000+120);
+  o.type=type;o.frequency.setValueAtTime(f1,t);o.frequency.exponentialRampToValueAtTime(f2,t+dur);
+  gn.gain.setValueAtTime(.0001,t);gn.gain.exponentialRampToValueAtTime(vol,t+Math.min(.03,dur/3));gn.gain.exponentialRampToValueAtTime(.0001,t+dur);
+  if(vib){const l=ac.createOscillator(),lg=ac.createGain();l.frequency.value=vib;lg.gain.value=f1*.08;l.connect(lg);lg.connect(o.frequency);l.start(t);l.stop(t+dur)}
+  o.connect(gn);gn.connect(master());o.start(t);o.stop(t+dur+.02);
+}
+const later=(f,ms)=>setTimeout(f,ms);
+function seq(notes,step,type,vol,len,vib){notes.forEach((f,i)=>later(()=>tone(f,f*1.02,len||step*1.6,type,vol,vib),i*step*1000))}
+function whoosh(dur,f0,f1,vol){
+  if(!ac||ac.state!=='running')return;
+  const n=Math.floor(ac.sampleRate*dur),b=ac.createBuffer(1,n,ac.sampleRate),d=b.getChannelData(0);
+  for(let i=0;i<n;i++)d[i]=(Math.random()*2-1)*Math.sin(Math.PI*i/n);
+  const sr=ac.createBufferSource(),f=ac.createBiquadFilter(),gn=ac.createGain(),t=ac.currentTime;
+  selfMute=Math.max(selfMute,now+dur*1000+120);
+  f.type='bandpass';f.Q.value=2;f.frequency.setValueAtTime(f0,t);f.frequency.exponentialRampToValueAtTime(f1,t+dur);
+  gn.gain.value=vol;sr.buffer=b;sr.connect(f);f.connect(gn);gn.connect(master());sr.start(t);
+}
+function sound(n){
+  if(n==='happy'){seq([523,659,784,1047],.11,'sine',.2,.3,6)}
+  else if(n==='wow'){tone(380,1200,.35,'sine',.22,8);later(()=>tone(1200,900,.25,'sine',.15),330)}
+  else if(n==='angry'){tone(160,70,1,'sawtooth',.16,30);tone(165,75,1,'square',.06,26)}
+  else if(n==='scared'){tone(900,1500,.9,'triangle',.18,16);later(()=>tone(1400,1000,.5,'triangle',.14,18),600)}
+}
+const yawnSnd=()=>{tone(440,160,1.5,'sine',.16,5);whoosh(1.3,500,200,.05)};
+const smackSnd=()=>{tone(320,160,.08,'square',.08);later(()=>tone(300,150,.08,'square',.08),280)};
+const snoreSnd=()=>{tone(120,65,1.1,'triangle',.1);whoosh(1,300,150,.04)};
+const squeak=()=>{tone(1200,2000,.3,'sine',.2,25);later(()=>tone(1700,1100,.35,'sine',.16,20),250)};
+const jolt=()=>tone(700,1600,.2,'square',.12);
+const screamSnd=()=>{tone(1000,2200,.5,'sawtooth',.14,30);later(()=>tone(2000,700,.9,'triangle',.18,22),350)};
+const waryOh=()=>tone(500,700,.55,'sine',.18,10);
+const askSnd=()=>{tone(500,640,.18,'sine',.18);later(()=>tone(600,900,.3,'sine',.18),190)};
+const groan=()=>tone(150,260,1.1,'sawtooth',.1,6);
+const startSnd=()=>{jolt();later(squeak,150)};
+const danceNote=b=>{const sc=[523,587,659,784,880],f=sc[(b*3+Math.floor(b/4))%5];tone(f,f*1.01,.28,'triangle',.2,6);if(b%2===0)tone(f/4,f/4,.3,'sine',.2)};
+let purr=null;
+function purrOn(){
+  if(!ac||ac.state!=='running'||purr)return;
+  const o=ac.createOscillator(),f=ac.createBiquadFilter(),am=ac.createGain(),m=ac.createGain(),l=ac.createOscillator(),lg=ac.createGain();
+  o.type='sawtooth';o.frequency.value=70;f.type='lowpass';f.frequency.value=500;
+  am.gain.value=.06;l.frequency.value=24;lg.gain.value=.05;l.connect(lg);lg.connect(am.gain);
+  m.gain.value=0;o.connect(f);f.connect(am);am.connect(m);m.connect(master());
+  o.start();l.start();m.gain.setTargetAtTime(1,ac.currentTime,.2);purr={o,l,m};
+}
+function purrOff(){
+  if(!purr)return;
+  const p=purr,t=ac.currentTime;purr=null;
+  p.m.gain.setTargetAtTime(0,t,.1);p.o.stop(t+.6);p.l.stop(t+.6);
+}
+// хлопок: резкий пик громкости над фоном; свои звуки и эхо (250 мс) игнорируются
+let avg=.02,lastClap=-1e9,claps=[],lastPk=0,dbg=false,cTaps=[],pt0=0;
+function mic(){
+  if(!an)return;
+  an.getByteTimeDomainData(abuf);
+  let pk=0;for(let i=0;i<abuf.length;i++)pk=Math.max(pk,Math.abs(abuf[i]-128)/128);
+  lastPk=pk;if(pk>Math.max(.07,avg*5)&&now>selfMute&&!purr&&now-lastClap>250){
+    lastClap=now;claps.push(now);claps=claps.filter(c=>now-c<1800);onClap();
+  }
+  avg=avg*.98+Math.min(pk,.25)*.02;
+}
+function onClap(){
+  clapLike=Math.min(1,clapLike+.1);
+  if(claps.length>=2)go('dance',3200+clapLike*3000);
+  else go('clap',1800,{side:rnd()<.5?-1:1});
+}
+
+/* ---------- касания ---------- */
+let tgx=0,tgy=0,lastT=-1e9,touchEmo=null,down=false,downInfo=null,path=[],taps=[],stroke0=0;
+function feel(n,quiet,force){
+  if(!quiet&&(n!==lastEmo||force)&&now-lastSnd>300){lastSnd=now;sound(n)}
+  lastEmo=n;touchEmo=n;
+  if(n==='purr')purrOn();else purrOff();
+}
+function setGaze(x,y){tgx=(x/W-.5)*2;tgy=(y/H-.5)*2;lastT=now}
+function analyze(){
+  while(path.length&&now-path[0].t>700)path.shift();
+  if(path.length<4)return;
+  let L=0,rev=0,pv=null;
+  for(let i=1;i<path.length;i++){
+    const vx=path[i].x-path[i-1].x,vy=path[i].y-path[i-1].y,l=Math.hypot(vx,vy);
+    if(l<4)continue;L+=l;
+    if(pv&&vx*pv.x+vy*pv.y<0)rev++;pv={x:vx,y:vy};
+  }
+  const dt=(path[path.length-1].t-path[0].t)/1000||1,sp=L/dt;
+  if(rev>=4&&sp>400)feel('scared');
+  else if(L>40&&rev<=2&&sp<900){
+    if(!stroke0)stroke0=now;
+    if(now-stroke0>=500*(1.3-petLike*.6)){if(lastEmo!=='purr')petLike=Math.min(1,petLike+.03);feel('purr')}
+  }else stroke0=0;
+}
+cv.addEventListener('pointerdown',e=>{
+  unlock();
+  if(e.clientX<70&&e.clientY<70){cTaps=cTaps.filter(x=>now-x<1500);cTaps.push(now);if(cTaps.length>=3){dbg=!dbg;cTaps=[]}}
+  // во сне касание = резкий испуг; в остальных состояниях прежняя логика
+  if(st==='sleep'||st==='drowsy'){go('startle',4800,{x:e.clientX});return}
+  if(st!=='awake')return;
+  down=true;stroke0=0;
+  downInfo={t:now,moved:0,x:e.clientX,y:e.clientY};
+  path=[{x:e.clientX,y:e.clientY,t:now}];
+  setGaze(e.clientX,e.clientY);
+});
+cv.addEventListener('pointermove',e=>{
+  if(st!=='awake')return;
+  setGaze(e.clientX,e.clientY);
+  if(!down)return;
+  downInfo.moved+=Math.hypot(e.clientX-downInfo.x,e.clientY-downInfo.y);
+  downInfo.x=e.clientX;downInfo.y=e.clientY;
+  path.push({x:e.clientX,y:e.clientY,t:now});analyze();
+});
+cv.addEventListener('pointerup',e=>{
+  if(!down)return;down=false;
+  if(downInfo.moved<12&&now-downInfo.t<350){
+    taps.push({t:now,near:Math.hypot(e.clientX-W/2,e.clientY-H/2)<.5*U});
+    taps=taps.filter(k=>now-k.t<1000);
+    const knocks=taps.filter(k=>k.near).length;
+    feel(knocks>=(lastEmo==='angry'?3:4)?'angry':'wow',false,true);
+  }
+});
+cv.addEventListener('pointercancel',()=>{down=false});
+
+/* ---------- поведение по состояниям ---------- */
+let spd=.12,gk=.16,tx=0,ty=0,wx=0,wy=0,nextWander=0,micro={k:0,until:0},nextMicro=3000;
+let blink=0,blinkStart=-1,nextBlink=2000,blinkDur=180;
+let nextTwitch=4000,twitch={until:0,k:0},nextSnore=2000,lastBeat=-1,absent=false;
+const mouthOpen=q=>Math.sin(Math.PI*q)*.95;
+
+function beh(t){
+  const p=now-st0;spd=.12;gk=.16;
+  if(now>nextWander){wx=(rnd()-.5)*1.2;wy=(rnd()-.5)*.8;nextWander=now+900+rnd()*2600;if(rnd()<.2){wx*=1.6;nextWander=now+1200}}
+  switch(st){
+  case 'awake':{
+    const touching=now-lastT<(lastEmo==='purr'?2000:3000)&&touchEmo;
+    if(touching)S(touchEmo);else S(courage>.4?'happy':'calm',{curve:.55});
+    if(!touching){
+      if(now>nextMicro){micro={k:Math.floor(rnd()*2),until:now+900};nextMicro=now+2500+rnd()*5000}
+      if(now<micro.until){if(micro.k===0)tgt.lift=.6;else{tgt.eye=.72;tgt.lidL=.9}}
+    }
+    let gx2=wx,gy2=wy;
+    if(now-lastT<1500){gx2=tgx;gy2=tgy}
+    else if(handFresh()){gx2=(.5-hand.x)*2.2;gy2=(hand.y-.5)*2.2}
+    else if(faceFresh()){gx2=face.gx+wx*.3;gy2=face.gy+wy*.3;tgt.tilt=-face.roll*.4}
+    tx=gx2;ty=gy2;if(now-lastT>=1500&&handFresh())gk=.32;
+    break}
+  case 'wary':{
+    const s=stArg.side||1;S('scared',{shake:.25,open:0,eye:1.2,lift:.6,ox:-s*.1,tilt:-s*.15,curve:0});
+    if(handFresh()){tx=(.5-hand.x)*2.2;ty=(hand.y-.5)*2.2}
+    if(!stArg.s){stArg.s=1;waryOh()}
+    break}
+  case 'wave':{
+    const d=swipeDir,n=swipeN;S('curious',{lidR:1,lift:.3});
+    if(n>=1){if(handFresh()){tx=(.5-hand.x)*2.2;ty=(hand.y-.5)*2.2}else{tx=d*1.1;ty=0}}
+    if(n>=2){tgt.ox=d*.08;tgt.tilt=d*.1}
+    if(n>=3){tgt.eye=1.15;tgt.lift=.5}
+    if(n>=5){
+      const back=(p%2000)<500;
+      tgt.ox=back?0:-d*.3;tgt.tilt=back?0:-d*.08;
+      if(back){tx=-d*.3;ty=0}
+    }
+    spd=.07;break}
+  case 'clap':{
+    const s=stArg.side||1;
+    if(p<350){S('wow',{eye:1.4,oy:-.03});tx=s*1.2;spd=.35;if(!stArg.j){stArg.j=1;startSnd();later(askSnd,800)}}
+    else{S('curious');tx=p<1000?s*1:0;ty=0}
+    break}
+  case 'dance':{
+    const w=7;S('happy',{curve:1,eye:.4,w:1.15,ox:Math.sin(t*w)*.07,tilt:Math.sin(t*w)*.14,oy:-Math.abs(Math.sin(t*w))*.05});
+    spd=.3;tx=0;ty=0;
+    const b=Math.floor(t*w/Math.PI);
+    if(b!==lastBeat){lastBeat=b;danceNote(b)}
+    break}
+  case 'panic':{
+    const s=stArg.side||1,v=stArg.v||0;spd=.4;gk=.4;
+    if(v===1&&p>350)S('scared',{eye:.05,ox:-s*.3,sc:.8,a:p>800?0:1,shake:2});
+    else S('terror',{ox:-s*.3,sc:.82,oy:-.04,a:p>(v===2?900:600)?0:1});
+    if(handFresh()){tx=(.5-hand.x)*2.2;ty=(hand.y-.5)*2.2}
+    if(!stArg.s){stArg.s=1;screamSnd()}
+    break}
+  case 'exit':{
+    const d=stArg.d||1;spd=.1;tx=d*1.2;ty=0;
+    if(p<500){S('curious',{ox:-d*.05,tilt:-d*.12,sc:.96,lift:.7})}
+    else if(p<1700){
+      if(!stArg.w){stArg.w=1;whoosh(.9,400,1400,.18);seq([440,494,440,494],.18,'triangle',.12,.15)}
+      S('happy',{curve:.7,ox:d*1.5,tilt:d*.12,oy:-Math.abs(Math.sin(p*.012))*.035});spd=.055}
+    else if(p<4300){S('calm',{ox:d*1.5});spd=.06}
+    else if(p<5400){if(!stArg.k){stArg.k=1;waryOh()}S('curious',{ox:d*.5,tilt:-d*.1});tx=-d*.8;spd=.06}
+    else{S('curious',{ox:0});tx=0;spd=.06}
+    break}
+  case 'hide':S('sleep',{a:0});spd=.3;break;
+  case 'peek':{
+    S('scared',{shake:0,eye:.9,lift:.5,open:0,curve:0,ma:p<1800?0:1,a:1,tilt:p<1800?0:0});
+    tx=p<900?-1:p<1800?1:0;ty=0;spd=.08;
+    if(handNear()&&hand.v>1.25)go('panic',1300,{v:Math.floor(rnd()*3),side:hand.x<.5?1:-1},true);
+    break}
+  case 'startle':{
+    const s=stArg.x<W/2?1:-1;
+    if(p<2500){S('terror',{ox:s*.1,tilt:s*.1,oy:-.03});tx=Math.sin(p*.012)*1.2;ty=0;spd=.4;gk=.4;if(!stArg.j){stArg.j=1;startSnd()}}
+    else{S('displeased',{tilt:Math.sin(p*.008)*.08});tx=0;ty=0;spd=.08}
+    break}
+  case 'drowsy':{
+    spd=.08;
+    if(p<2000){S('calm');tx=Math.sin(p*.005);ty=Math.sin(p*.003)*.3}
+    else if(p<4000){S('drowsy',{eye:1-.65*((p-2000)/2000)});tx=0;ty=.4}
+    else if(p<5600){if(!stArg.y){stArg.y=1;yawnSnd()}S('drowsy',{open:mouthOpen((p-4000)/1600),eye:.12,lift:.8,oy:.03});spd=.1}
+    else if(p<6600){if(!stArg.s){stArg.s=1;smackSnd()}S('drowsy',{open:Math.floor((p-5600)/250)%2?.14:0,eye:.3})}
+    else if(p<8300)S('drowsy',{eye:Math.floor((p-6600)/600)%2?.05:.3,oy:.05});
+    else S('sleep');
+    break}
+  case 'sleep':{
+    spd=.06;S('sleep',{oy:.07+Math.sin(t*1.1)*.006,sc:1+Math.sin(t*1.1)*.01,tilt:Math.sin(t*.5)*.02});
+    if(now>nextTwitch){nextTwitch=now+3000+rnd()*5000;twitch={until:now+350,k:rnd()}}
+    if(now<twitch.until){tgt.ox=(twitch.k-.5)*.05;tgt.open=twitch.k>.6?.13:0;tgt.tilt+=(twitch.k-.5)*.1;spd=.25}
+    if(now>nextSnore){nextSnore=now+4800;snoreSnd()}
+    tx=0;ty=.3;break}
+  case 'wake':{
+    spd=.07;
+    if(handFresh()){tx=(.5-hand.x)*2;ty=(hand.y-.5)*1.6}else{tx=0;ty=0}
+    if(p<1000){if(!stArg.g){stArg.g=1;groan()}S('sleep',{eye:.06+.06*Math.abs(Math.sin(p*.012))})}
+    else if(p<1800)S('drowsy',{lidR:.15,oy:.06,lift:.2});
+    else if(p<2600)S('drowsy',{lidR:1,eye:.5,oy:.02});
+    else if(p<4000)S('curious',{eye:.85,lift:.3});
+    else if(p<5000){if(!stArg.y){stArg.y=1;yawnSnd()}S('drowsy',{open:mouthOpen((p-4000)/1000),eye:.12,lift:.8})}
+    else if(p<5600){if(!stArg.s){stArg.s=1;smackSnd()}S('calm',{open:Math.floor((p-5000)/250)%2?.14:0,eye:.7})}
+    else S('calm',{eye:Math.floor((p-5600)/300)%2?.06:.9});
+    break}
+  }
+}
+
+function updateState(){
+  if(stDur&&now-st0>stDur){
+    const n=st;
+    if(n==='panic')go('hide',3000+rnd()*2500,{},true);
+    else if(n==='hide')go('peek',2800,{},true);
+    else if(n==='peek')go('awake',0,{},true);
+    else if(n==='drowsy')go('sleep',0,{},true);
+    else if(n==='startle')go('wary',2200,{side:1},true);
+    else go('awake',0,{},true);
+  }
+  const seen=Math.max(faceSeen,handSeen,lastT,lastClap);
+  absent=camOK?now-Math.max(seen,t00)>12000:now-Math.max(lastT,t00)>20000;
+  const bored=now-Math.max(lastT,handSeen,lastClap,t00)>40000;
+  if((absent||bored)&&(st==='awake'||st==='wary'||st==='wave'))go('drowsy',9500,{b:bored&&!absent},true);
+  if(st==='drowsy'&&!stArg.b&&faceFresh())go('awake',0,{},true);
+  if(st==='awake'){
+    courage=Math.min(1,courage+.00003);
+    if(now-lastT>(lastEmo==='purr'?2000:3000)){touchEmo=null;purrOff()}
+  }
+}
+
+/* ---------- рисование ---------- */
+function glow(){g.shadowColor='#5ff5ff';g.shadowBlur=U*.06;g.strokeStyle=g.fillStyle='#8ffaff'}
+let gx=0,gy=0;
+function draw(t){
+  g.clearRect(0,0,W,H);
+  if(cur.a<.02)return;
+  g.save();
+  g.globalAlpha=Math.max(0,Math.min(1,cur.a));
+  glow();
+  const shk=cur.shake;
+  const cx=W/2+cur.ox*U+Math.sin(t*60)*.006*U*shk;
+  const cy=H/2+cur.oy*U+Math.sin(t*1.6)*.012*U+Math.cos(t*53)*.006*U*shk;
+  g.translate(cx,cy);g.rotate(cur.tilt);g.scale(cur.sc,cur.sc);
+  const ew=.15*U,ey=-.12*U;
+  for(const s of[-1,1]){
+    const lid=s<0?cur.lidL:cur.lidR;
+    const eh=Math.max(.2*U*cur.eye*lid*(1-blink),.014*U);
+    const ex=s*.22*U+gx*.015*U;
+    g.beginPath();g.roundRect(ex-ew/2,ey-eh/2,ew,eh,ew/2);g.fill();
+    g.save();g.shadowBlur=0;g.clip();g.fillStyle='#05070a';
+    g.beginPath();g.arc(ex+gx*.03*U,ey+gy*Math.max(eh/2-.04*U,0),.04*U,0,Math.PI*2);g.fill();
+    g.restore();glow();
+    const by=ey-.2*U-cur.lift*.04*U-(eh-.2*U)/2;
+    g.lineWidth=.035*U;g.lineCap='round';
+    g.beginPath();g.moveTo(ex+s*.09*U,by);g.lineTo(ex-s*.09*U,by+cur.brow*.05*U);g.stroke();
+  }
+  g.globalAlpha*=Math.max(0,Math.min(1,cur.ma));
+  const my=.2*U;g.lineWidth=.035*U;g.lineCap='round';g.beginPath();
+  if(cur.open>.1)g.ellipse(0,my,.1*U*cur.w+.02*U,.11*U*cur.open,0,0,Math.PI*2);
+  else{const hw=.2*U*cur.w;g.moveTo(-hw,my);g.quadraticCurveTo(0,my+cur.curve*.2*U,hw,my)}
+  g.stroke();
+  g.restore();
+}
+
+function drawDbg(){
+  if(!dbg)return;
+  g.save();g.shadowBlur=0;g.fillStyle='#8ffaff';g.font='12px monospace';
+  const T=[`state:${st} cam:${camOK} mic:${micOK} audio:${ac&&ac.state}`,
+    `hand:${handFresh()?'yes':'no'} size:${hand?hand.sz.toFixed(2):'-'} speed:${hand?hand.v.toFixed(2):'-'}`,
+    `face:${faceFresh()?'yes':'no'} peak:${lastPk.toFixed(2)} avg:${avg.toFixed(3)} claps:${claps.length}`,
+    `absent:${absent} courage:${courage.toFixed(2)}`];
+  T.forEach((x,i)=>g.fillText(x,10,24+i*16));g.restore();
+}
+/* ---------- главный цикл ---------- */
+let t00=0;
+function detect(){
+  if(!camOK||document.hidden||vid.readyState<2||now-lastDet<55)return;
+  lastDet=now;detTick++;
+  try{
+    if(detTick%3!==0&&handLM){const r=handLM.detectForVideo(vid,now);if(r.landmarks&&r.landmarks[0])onHand(r.landmarks[0])}
+    else if(faceLM){const r=faceLM.detectForVideo(vid,now);if(r.faceLandmarks&&r.faceLandmarks[0])onFace(r.faceLandmarks[0])}
+  }catch(e){}
+}
+function frame(ms){
+  now=ms;const t=ms/1000;
+  mic();detect();updateState();beh(t);
+  for(const k in cur)cur[k]+=(tgt[k]-cur[k])*spd;
+  gx+=(tx-gx)*gk;gy+=(ty-gy)*gk;
+  if(blinkStart<0&&now>nextBlink)blinkStart=now;
+  if(blinkStart>=0){
+    const q=(now-blinkStart)/blinkDur;
+    if(q>=1){blinkStart=-1;blink=0;nextBlink=now+2000+rnd()*3500;blinkDur=120+rnd()*180}
+    else blink=Math.sin(Math.PI*q);
+  }
+  draw(t);drawDbg();
+  requestAnimationFrame(frame);
+}
+
+/* ---------- запуск ---------- */
+async function mk(cls,fs,url){
+  const base=m=>({baseOptions:{modelAssetPath:url,delegate:m},runningMode:'VIDEO',numHands:1,numFaces:1,minHandDetectionConfidence:.35,minHandPresenceConfidence:.35,minTrackingConfidence:.35,minFaceDetectionConfidence:.4,minFacePresenceConfidence:.4});
+  try{return await cls.createFromOptions(fs,base('GPU'))}catch(e){return await cls.createFromOptions(fs,base('CPU'))}
+}
+let stream=null;
+async function start(){
+  goBtn.remove();unlock();
+  const audio={echoCancellation:false,noiseSuppression:false,autoGainControl:false};
+  const tries=[{video:{facingMode:'user',width:320,height:240},audio},{video:{facingMode:'user',width:320,height:240}},{audio}];
+  for(const c of tries){try{stream=await navigator.mediaDevices.getUserMedia(c);break}catch(e){}}
+  t00=performance.now();
+  requestAnimationFrame(frame);
+  if(!stream)return; // нет доступа: остаются только касания
+  if(stream.getAudioTracks().length&&ac){
+    const src=ac.createMediaStreamSource(stream);an=ac.createAnalyser();an.fftSize=1024;abuf=new Uint8Array(an.fftSize);src.connect(an);const z=ac.createGain();z.gain.value=0;an.connect(z);z.connect(ac.destination);ac.resume();micOK=true;
+  }
+  if(stream.getVideoTracks().length){
+    vid.srcObject=new MediaStream(stream.getVideoTracks());
+    try{await vid.play()}catch(e){}
+    try{
+      const fs=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+      handLM=await mk(HandLandmarker,fs,'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task');
+      faceLM=await mk(FaceLandmarker,fs,'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task');
+      camOK=true;
+    }catch(e){camOK=false}
+  }
+}
+goBtn.addEventListener('click',start);
+function stopAll(){if(stream)stream.getTracks().forEach(k=>k.stop());purrOff()}
+addEventListener('pagehide',stopAll);
+</script>
+</body>
+</html>
