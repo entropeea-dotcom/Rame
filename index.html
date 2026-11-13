@@ -75,7 +75,7 @@ let courage=.5,clapLike=.3,petLike=.3,lastAct=0;
 
 /* ---------- восприятие ---------- */
 let camOK=false,micOK=false,hand=null,face=null,handSeen=-1e9,faceSeen=-1e9;
-let gun0=0,gunDbg='-',ssz=0,handHist=[],tipHist=[],swipeN=0,swipeDir=1,lastSwipe=-1e9;
+let lastHandL=null,gun0=0,gunDbg='-',ssz=0,handHist=[],tipHist=[],swipeN=0,swipeDir=1,lastSwipe=-1e9;
 let handLM=null,faceLM=null,detTick=0,lastDet=0;
 const handFresh=()=>now-handSeen<900, faceFresh=()=>now-faceSeen<900;
 const handNear=()=>handFresh()&&hand.sz>.22;
@@ -90,17 +90,19 @@ function onHand(L){
   if(handHist.length>1){const a=handHist[0];if(now-a.t>200)r=sz/Math.max(a.sz,.02)}
   let motion=0;for(let i=1;i<tipHist.length;i++)motion+=Math.abs(tipHist[i].x-tipHist[i-1].x)+Math.abs(tipHist[i].y-tipHist[i-1].y);
   const px=hand&&now-handSeen<900?hand.x*.5+tip.x*.5:tip.x,py=hand&&now-handSeen<900?hand.y*.5+tip.y*.5:tip.y;
-  hand={x:px,y:py,sz,v:r,motion};handSeen=now;
+  hand={x:px,y:py,sz,v:r,motion};handSeen=now;lastHandL=L;
 
   const sleeping=st==='sleep'||st==='drowsy';
   const k=1+(.5-courage)*.6;
   // жест «пистолет»: указательный направлен на камеру, остальные согнуты, большой поднят
   const d3=(a,b)=>Math.hypot(L[a].x-L[b].x,L[a].y-L[b].y,(L[a].z||0)-(L[b].z||0));
-  const ext3=(a,b)=>d3(a,0)>d3(b,0)*1.12;
-  const vz=(L[8].z||0)-(L[5].z||0),len2=Math.hypot(L[8].x-L[5].x,L[8].y-L[5].y);
-  const gi=ext3(8,6),gc=!ext3(12,10)&&!ext3(16,14)&&!ext3(20,18),gt=d3(4,5)>.5*sz,gz=vz<-.02&&len2<Math.max(.04,1.4*-vz);
-  gunDbg=[gi,gc,gt,gz].map(x=>x?1:0).join('')+' vz'+vz.toFixed(2);
-  const gunPose=!sleeping&&gi&&gc&&gt&&gz;
+  // прямота пальца: прямое расстояние от основания до кончика / длина по суставам (1 = прямой, меньше = согнут)
+  const fs=(m,p,d,t)=>d3(t,m)/Math.max(.001,d3(m,p)+d3(p,d)+d3(d,t));
+  const sI=fs(5,6,7,8),sM=fs(9,10,11,12),sR=fs(13,14,15,16),sP=fs(17,18,19,20);
+  const dxg=L[8].x-L[5].x,dyg=L[8].y-L[5].y;
+  const sideways=Math.abs(dxg)>Math.abs(dyg)*1.6&&Math.hypot(dxg,dyg)>.05;
+  const gunPose=!sleeping&&sI>.8&&sM<.78&&sR<.78&&sP<.78&&!sideways;
+  gunDbg=`указ ${sI.toFixed(2)} сред ${sM.toFixed(2)} безым ${sR.toFixed(2)} мизин ${sP.toFixed(2)} ${sideways?'вбок':'прямо'} = ${gunPose?'ПИСТОЛЕТ':'нет'}`;
   if(gunPose){
     if(!gun0)gun0=now;
     if(st==='handsup')go('handsup',1300);
@@ -715,14 +717,19 @@ function draw(t){
 function drawDbg(){
   if(!dbg)return;
   g.save();g.shadowBlur=0;g.fillStyle='#8ffaff';g.font='12px monospace';
-  const T=[`state:${st} cam:${camOK} mic:${micOK} audio:${ac&&ac.state}`,
+  const T=[`v8 state:${st} cam:${camOK} mic:${micOK} audio:${ac&&ac.state}`,
     `hand:${handFresh()?'yes':'no'} size:${hand?hand.sz.toFixed(2):'-'} speed:${hand?hand.v.toFixed(2):'-'}`,
     `face:${faceFresh()?'yes':'no'} peak:${lastPk.toFixed(2)} avg:${avg.toFixed(3)} claps:${claps.length}`,
     `absent:${absent} courage:${courage.toFixed(2)}`,
-    `gun(палец/пальцы/большой/на камеру): ${gunDbg}`,
+    `gun: ${handFresh()?gunDbg:'рука не видна'}`,
     `exp:${face&&face.kind||'-'} smile:${face?face.smile.toFixed(2):'-'} jaw:${face?face.jaw.toFixed(2):'-'}`,
     `brow-down:${face?face.bd.toFixed(2):'-'} frown:${face?face.frown.toFixed(2):'-'} brow-up:${face?face.bi.toFixed(2):'-'}`];
-  T.forEach((x,i)=>g.fillText(x,10,24+i*16));g.restore();
+  T.forEach((x,i)=>g.fillText(x,10,24+i*16));
+  if(lastHandL&&handFresh()){
+    g.fillStyle='#ffe066';for(const q of lastHandL){g.beginPath();g.arc((1-q.x)*W,q.y*H,3,0,6.3);g.fill()}
+    g.fillStyle='#ff5a5a';g.beginPath();g.arc((1-lastHandL[8].x)*W,lastHandL[8].y*H,6,0,6.3);g.fill();
+  }
+  g.restore();
 }
 /* ---------- главный цикл ---------- */
 let t00=0;
@@ -755,14 +762,14 @@ function frame(ms){
 
 /* ---------- запуск ---------- */
 async function mk(cls,fs,url){
-  const base=m=>({baseOptions:{modelAssetPath:url,delegate:m},runningMode:'VIDEO',numHands:1,numFaces:1,minHandDetectionConfidence:.35,minHandPresenceConfidence:.35,minTrackingConfidence:.35,minFaceDetectionConfidence:.4,minFacePresenceConfidence:.4,outputFaceBlendshapes:true});
+  const base=m=>({baseOptions:{modelAssetPath:url,delegate:m},runningMode:'VIDEO',numHands:1,numFaces:1,minHandDetectionConfidence:.25,minHandPresenceConfidence:.25,minTrackingConfidence:.25,minFaceDetectionConfidence:.4,minFacePresenceConfidence:.4,outputFaceBlendshapes:true});
   try{return await cls.createFromOptions(fs,base('GPU'))}catch(e){return await cls.createFromOptions(fs,base('CPU'))}
 }
 let stream=null;
 async function start(){
   goBtn.remove();unlock();
   const audio={echoCancellation:false,noiseSuppression:false,autoGainControl:false};
-  const tries=[{video:{facingMode:'user',width:480,height:360},audio},{video:{facingMode:'user',width:480,height:360}},{audio}];
+  const tries=[{video:{facingMode:'user',width:640,height:480},audio},{video:{facingMode:'user',width:640,height:480}},{audio}];
   for(const c of tries){try{stream=await navigator.mediaDevices.getUserMedia(c);break}catch(e){}}
   t00=performance.now();
   requestAnimationFrame(frame);
