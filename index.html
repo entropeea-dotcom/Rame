@@ -165,7 +165,7 @@ function onHand(L){
   poseHist.push({t:now,p:upose});while(poseHist.length&&now-poseHist[0].t>1800)poseHist.shift();
   ycHist.push({t:now,y:(L[0].y+L[9].y)/2});while(ycHist.length&&now-ycHist[0].t>1500)ycHist.shift();
   handDbg=`размах ${scale.toFixed(2)} рост ${gr.toFixed(2)} поза ${upose||'-'}`;
-  if(upose==='rock'){if(!rock0)rock0=now}else rock0=0;
+  if(upose==='rock'&&!nearTemple){if(!rock0)rock0=now}else rock0=0;
   if(rock0&&now-rock0>600&&now-lastRps>3500&&!['rps','handsup','shot','crazy','hide','panic','peek','spin','exit','wake','startle'].includes(st)){
     rock0=0;go('rps',16000,{phase:'pump',count:0,tb:now,period:1});
   }
@@ -653,6 +653,7 @@ function beh(t){
       if(fg){tx=fg.gx;ty=fg.gy*.5}
       if(now-(stArg.ts||0)>520){stArg.ts=now;seq([700,900,700,900],.07,'sine',.1,.1)}
     }else{
+      if(p<3250){armPose='twirl';armP=1-(p-2900)/350}
       S('sulk',{eye:.05,yaw:d*.5,pitch:-.25,ox:d*.04,curve:-.4,lift:-.3,tilt:d*.08});
       if(!stArg.h){stArg.h=1;whoosh(.5,700,250,.07);tone(240,180,.35,'sawtooth',.08,14)}
     }
@@ -670,7 +671,7 @@ function beh(t){
       const tl=started?(1-pp)*.15:.15;
       a.lf+=(tl-a.lf)*(p<700?.12:.35);
       rpsHand={g:'rock',lift:a.lf,a:Math.min(1,p/300)};
-      if(started&&now-a.tb>per*1.35&&now-lastBeatT>550)rpsBeat();
+      if(started&&now-a.tb>per*1.5&&now-lastBeatT>550)rpsBeat();
       if(now-handSeen>1500||now-st0>14000){a.phase='cancel';a.t1=now;askSnd()}
     }else if(a.phase==='reveal'){
       S('curious',{eye:1.15,lift:.7,curve:.2});
@@ -829,6 +830,10 @@ function toonHand(x,y,kind,u,rot,alpha,fl){
     if(q.e){g.beginPath();g.ellipse(q.cx,q.cy,q.rx,q.ry,0,0,6.3);g.fill()}
     else{g.lineWidth=q.w;g.beginPath();g.moveTo(q.x1,q.y1);g.lineTo(q.x2,q.y2);g.stroke()}
   }
+  if(kind!=='paper'){
+    g.strokeStyle='#aebccb';g.lineWidth=.5;g.beginPath();g.moveTo(-.8,.1);g.lineTo(-.35,0);g.stroke();
+    g.strokeStyle=gr;g.lineWidth=.42;g.beginPath();g.moveTo(-.8,.1);g.lineTo(-.35,0);g.stroke();
+  }
   if(kind==='fist'){
     g.strokeStyle='#aebccb';g.lineWidth=.05;
     g.beginPath();for(const lx of[-.44,0,.44]){g.moveTo(lx,-.78);g.lineTo(lx,-.42)}g.stroke();
@@ -839,9 +844,12 @@ function drawRArm(cx,cy,t){
   if(!armPose)return;
   const e=armP*armP*(3-2*armP),rise=(1-e)*.9*U;
   g.save();
-  // кручение пальцем у виска: кисть сразу у виска, кончик пальца смотрит на висок и крутится кругами
-  const hx=cx+.6*U+Math.cos(t*14)*.025*U,hy=cy-.06*U+rise+Math.sin(t*14)*.025*U;
-  toonHand(hx,hy,'point',.1*U,-Math.PI/2,1);
+  // кручение пальцем у виска: кисть сразу у виска, кончик пальца крутится кругами прямо на виске
+  const u=.08*U,th=-.6;
+  const tipx=cx+.34*U+Math.cos(t*14)*.02*U,tipy=cy-.13*U+rise+Math.sin(t*14)*.02*U;
+  const lx=-.45*u,ly=-1.7*u;
+  const hx=tipx-(lx*Math.cos(th)-ly*Math.sin(th)),hy=tipy-(lx*Math.sin(th)+ly*Math.cos(th));
+  toonHand(hx,hy,'point',u,th,1);
   g.restore();
 }
 function drawRps(cx,cy){
@@ -892,7 +900,7 @@ function draw(t){
     g.restore();
   }
   g.globalAlpha*=Math.max(0,Math.min(1,cur.ma));
-  const kidK=cur.lips>.5?0:Math.max(0,Math.min(1,(cur.curve-.2)/.3))*Math.max(0,Math.min(1,(cur.open-.04)/.1));
+  const kidK=(cur.lips>.5||cur.tongue>.3)?0:Math.max(0,Math.min(1,(cur.curve-.35)/.2))*Math.max(0,Math.min(1,(cur.open-.04)/.1));
   const my=.2*U-.035*U*kidK;g.save();place(0,my);g.lineWidth=.035*U;g.lineCap='round';g.beginPath();
   let tooth=null;
   if(cur.lips>.5){
@@ -909,7 +917,7 @@ function draw(t){
     g.beginPath();g.ellipse(0,my+.006*U,.027*U,.03*U,0,0,Math.PI*2);g.fill();
     g.restore();
     g.beginPath();
-  }else if((cur.teeth>.3&&cur.open>.08)||(cur.open>.08&&cur.curve>.3)){
+  }else if(cur.tongue<.3&&cur.open>.08&&(cur.teeth>.3||cur.curve>.45)){
     // детский рот: небольшой, ровный верх, круглый низ и два зубика
     const hw=.17*U*cur.w,dpt=Math.max(.2,cur.curve)*.08*U,depth=Math.min(.22*U,cur.open*.5*U+dpt/2);
     g.lineJoin='round';
@@ -982,7 +990,7 @@ function drawErr(){
 function drawDbg(){
   if(!dbg)return;
   g.save();g.shadowBlur=0;g.fillStyle='#8ffaff';g.font='12px monospace';
-  const T=[`v10 state:${st} cam:${camOK} mic:${micOK} audio:${ac&&ac.state}`,
+  const T=[`v11 state:${st} cam:${camOK} mic:${micOK} audio:${ac&&ac.state}`,
     `hand:${handFresh()?'yes':'no'} size:${hand?hand.sz.toFixed(2):'-'} speed:${hand?hand.v.toFixed(2):'-'}`,
     `face:${faceFresh()?'yes':'no'} peak:${lastPk.toFixed(2)} avg:${avg.toFixed(3)} claps:${claps.length}`,
     `absent:${absent} courage:${courage.toFixed(2)}`,
