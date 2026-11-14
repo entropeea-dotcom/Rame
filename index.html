@@ -27,7 +27,7 @@ addEventListener('resize',fit);fit();
 const rnd=Math.random;
 
 /* ---------- эмоции: поверх BASE ---------- */
-const BASE={curve:.5,open:0,eye:1,brow:0,lift:0,w:1,shake:0,lidL:1,lidR:1,tilt:0,ox:0,oy:0,sc:1,a:1,ma:1,gl:1,teeth:0,yaw:0,pitch:0,xeyes:0,tongue:0,arms:0};
+const BASE={curve:.5,open:0,eye:1,brow:0,lift:0,w:1,shake:0,lidL:1,lidR:1,tilt:0,ox:0,oy:0,sc:1,a:1,ma:1,gl:1,teeth:0,yaw:0,pitch:0,xeyes:0,tongue:0,arms:0,tpos:.35,lips:0};
 const E={
   happy:{curve:.75,w:.85}, calm:{curve:.35,eye:.85},
   curious:{curve:.15,eye:1.1,lift:.5,lidR:.82,tilt:.08},
@@ -41,12 +41,13 @@ const E={
   drowsy:{curve:0,eye:.35,lift:-.2,w:.6},
   sleep:{curve:.1,eye:.06,lift:-.2,w:.5,oy:.07},
   laugh:{curve:.8,open:.34,eye:.3,lift:.5,w:.85},
+  bleh:{curve:.55,open:.16,eye:.55,lift:.3,w:.7,tongue:1,tpos:0},
   giggle:{curve:.8,open:.22,eye:.45,lift:.3,tilt:.1,w:.8},
   sad:{curve:-.8,eye:.8,brow:-1,lift:.3,w:.8,oy:.03,lidL:.8,lidR:.8},
   sulk:{curve:-.55,eye:.5,brow:1,lift:-.4,w:.75,oy:.03,tilt:-.08},
   empathy:{curve:-.1,brow:-1,lift:.5,w:.7,tilt:.1},
   wink:{curve:.85,lidL:.05,lift:.2,w:1.05,tilt:.07},
-  love:{curve:0,open:.3,eye:.8,lift:.4,w:.3,tilt:.1},
+  love:{lips:1,curve:0,open:.3,eye:.8,lift:.4,w:.3,tilt:.1},
   silly:{curve:.9,open:.45,eye:1.1,lidL:.5,lidR:1.2,lift:.3,tilt:-.12},
   puff:{curve:.1,open:.35,eye:.6,w:.45,sc:1.08,lift:-.1},
   excited:{curve:.9,open:.3,eye:1.25,lift:.8,w:.85},
@@ -58,7 +59,7 @@ const TH={laugh:1,giggle:1,excited:1,silly:1};
 function S(n,o){Object.assign(tgt,BASE,E[n],{gl:GL[n]||1,teeth:TH[n]||0},o||{})}
 
 /* ---------- состояния и приоритеты (меньше = сильнее) ---------- */
-const P={handsup:3,shot:2,mirror:6,spin:6,exit:4,panic:1,hide:1,wake:2,startle:3,peek:3,wary:4,wave:4,clap:5,dance:5,awake:7,drowsy:8,sleep:8};
+const P={crazy:3,rps:3,flinch:4,handsup:3,shot:2,mirror:6,spin:6,exit:4,panic:1,hide:1,wake:2,startle:3,peek:3,wary:4,wave:4,clap:5,dance:5,awake:7,drowsy:8,sleep:8};
 let now=0,st='awake',st0=0,stDur=0,stArg={};
 function go(n,dur=0,arg={},force=false){
   if(n===st&&!force){if(dur)stDur=Math.max(stDur,now-st0+dur);return true}
@@ -75,12 +76,28 @@ let courage=.5,clapLike=.3,petLike=.3,lastAct=0;
 
 /* ---------- восприятие ---------- */
 let camOK=false,micOK=false,hand=null,face=null,handSeen=-1e9,faceSeen=-1e9;
-let lastHandL=null,gun0=0,gunDbg='-',ssz=0,handHist=[],tipHist=[],swipeN=0,swipeDir=1,lastSwipe=-1e9;
+let rpsLast='',scaleHist=[],lastFlinch=0,twHist=[],poseHist=[],ycHist=[],rock0=0,lastRps=-1e9,lastBeatT=0,lastCrazy=-1e9,handDbg='',armPose=null,armP=0,rpsHand=null,lastHandL=null,gun0=0,gunDbg='-',ssz=0,handHist=[],tipHist=[],swipeN=0,swipeDir=1,lastSwipe=-1e9;
 let handLM=null,faceLM=null,detTick=0,lastDet=0;
 const handFresh=()=>now-handSeen<900, faceFresh=()=>now-faceSeen<900;
 const handNear=()=>handFresh()&&hand.sz>.22;
 
+function rpsPump(){
+  const h=ycHist,n=h.length;if(n<5)return false;
+  const a=h[n-3],b=h[n-2],c=h[n-1];
+  if(b.y>a.y&&b.y>=c.y&&now-lastBeatT>350){
+    const mn=Math.min(...h.map(q=>q.y));
+    if(b.y-mn>.05)return true;
+  }
+  return false;
+}
+function rpsBeat(){
+  const a=stArg;a.count++;a.tb=now;lastBeatT=now;
+  const i=Math.min(2,a.count-1);
+  tone([420,480,560][i],[480,540,700][i],.18,'triangle',.2);
+  if(a.count>=3){a.phase='reveal';a.tr=now;a.cg=['rock','paper','scissors'][Math.floor(rnd()*3)];whoosh(.25,500,2000,.12);tone(300,900,.2,'square',.12)}
+}
 function onHand(L){
+  const wasSeen=handSeen;
   const rawSz=Math.hypot(L[0].x-L[9].x,L[0].y-L[9].y);
   const sz=ssz&&now-handSeen<900?ssz*.6+rawSz*.4:rawSz;ssz=sz;
   const tip=L[8];
@@ -101,29 +118,73 @@ function onHand(L){
   const sI=fs(5,6,7,8),sM=fs(9,10,11,12),sR=fs(13,14,15,16),sP=fs(17,18,19,20);
   const dxg=L[8].x-L[5].x,dyg=L[8].y-L[5].y;
   const sideways=Math.abs(dxg)>Math.abs(dyg)*1.6&&Math.hypot(dxg,dyg)>.05;
-  const gunPose=!sleeping&&sI>.8&&sM<.78&&sR<.78&&sP<.78&&!sideways;
+  const nearTemple=face&&faceFresh()&&Math.min(Math.hypot(L[8].x-face.tl.x,L[8].y-face.tl.y),Math.hypot(L[8].x-face.tr.x,L[8].y-face.tr.y))<face.wd*.4;
+  const gunPose=!sleeping&&!nearTemple&&sI>.8&&sM<.78&&sR<.78&&sP<.78&&!sideways;
   gunDbg=`указ ${sI.toFixed(2)} сред ${sM.toFixed(2)} безым ${sR.toFixed(2)} мизин ${sP.toFixed(2)} ${sideways?'вбок':'прямо'} = ${gunPose?'ПИСТОЛЕТ':'нет'}`;
   if(gunPose){
     if(!gun0)gun0=now;
     if(st==='handsup')go('handsup',1300);
-    else if(now-gun0>350&&!['shot','hide','panic','peek'].includes(st))go('handsup',1300);
+    else if(now-gun0>600&&!['shot','hide','panic','peek','rps','crazy'].includes(st))go('handsup',1300);
   }else gun0=0;
   // выстрел: резкий взмах пальцем (отдача), пока он стоит с поднятыми руками
-  if(st==='handsup'){
-    const q=tipHist.find(h=>now-h.t<260&&now-h.t>70);
-    if(q&&Math.hypot(tip.x-q.x,tip.y-q.y)>Math.max(.06,.35*sz)){go('shot',4000,{d:Math.random()<.5?-1:1});return}
+  if(st==='handsup'&&now-st0>1000){
+    const q=tipHist.find(h=>now-h.t<240&&now-h.t>90);
+    if(q){const dsp=Math.hypot(tip.x-q.x,tip.y-q.y);if(dsp>Math.max(.1,.5*sz)&&dsp/((now-q.t)/1000)>.6){go('shot',4000,{d:Math.random()<.5?-1:1});return}}
   }
-  // резкое приближение: сила реакции зависит от размера и скорости руки
-  if(st!=='hide'&&st!=='panic'&&st!=='handsup'&&st!=='shot'&&!gunPose&&((sz>.26&&r>1+.7/k)||(sz>.38&&r>1+.3/k)||sz>.55)){
+  // --- испуг: настоящая попытка напугать = рука быстро и устойчиво растёт в кадре (или сразу огромная) ---
+  let mnx=1,mxx=0,mny=1,mxy=0;
+  for(const q of L){if(q.x<mnx)mnx=q.x;if(q.x>mxx)mxx=q.x;if(q.y<mny)mny=q.y;if(q.y>mxy)mxy=q.y}
+  const scale=Math.max(mxx-mnx,mxy-mny,rawSz*2.2),ccx=(mnx+mxx)/2,ccy=(mny+mxy)/2;
+  scaleHist.push({t:now,v:scale,x:ccx,y:ccy});while(scaleHist.length&&now-scaleHist[0].t>600)scaleHist.shift();
+  let gr=1;
+  const w0=scaleHist.filter(q=>now-q.t>100&&now-q.t<450);
+  if(w0.length>=2){
+    const mn=Math.min(...w0.map(q=>q.v)),seq2=scaleHist.filter(q=>now-q.t<450);
+    let up=0;for(let i=1;i<seq2.length;i++)if(seq2[i].v>=seq2[i-1].v*.97)up++;
+    const sustained=seq2.length>=3&&up>=(seq2.length-1)*.7,lat=Math.hypot(ccx-w0[0].x,ccy-w0[0].y);
+    if(sustained&&lat<(scale-mn)*1.5+.12)gr=scale/Math.max(.05,mn);
+  }
+  hand.scale=scale;hand.gr=gr;
+  const ge=1+(gr-1)*k,appeared=now-wasSeen>600;
+  const scareOK=!['hide','panic','handsup','shot','crazy','rps'].includes(st)&&!gunPose;
+  if(scareOK&&((ge>=1.45&&scale>=.42)||(ge>=1.7&&scale>=.3)||scale>=.9||(appeared&&scale>=.65))){
     courage=Math.max(0,courage-.12);
     go('panic',1300,{v:Math.floor(rnd()*3),side:hand.x<.5?1:-1});return;
   }
   if(sleeping){
-    // медленное осторожное приближение с движением = пробуждение
     if(hand.motion>.25&&sz>.1&&r<1.35)go('wake',6500);
     return;
   }
-  if(sz>.2&&r>1+.55/k&&st!=='hide'&&st!=='panic'&&st!=='exit'&&st!=='handsup'&&st!=='shot'&&!gunPose)go('wary',2000,{side:hand.x<.5?1:-1});
+  if(scareOK&&st!=='exit'){
+    if(ge>=1.28&&scale>=.28&&now-lastFlinch>900){lastFlinch=now;courage=Math.max(0,courage-.03);go('flinch',900,{side:hand.x<.5?1:-1})}
+    else if(ge>=1.15&&scale>=.24&&st!=='flinch')go('wary',2000,{side:hand.x<.5?1:-1});
+  }
+  // --- классификация жеста для цу-е-фа ---
+  const ex8=s2=>s2>.8,cu8=s2=>s2<.74;
+  const upose=(cu8(sI)&&cu8(sM)&&cu8(sR)&&cu8(sP))?'rock':(ex8(sI)&&ex8(sM)&&ex8(sR)&&ex8(sP))?'paper':(ex8(sI)&&ex8(sM)&&cu8(sR)&&cu8(sP))?'scissors':null;
+  poseHist.push({t:now,p:upose});while(poseHist.length&&now-poseHist[0].t>1800)poseHist.shift();
+  ycHist.push({t:now,y:(L[0].y+L[9].y)/2});while(ycHist.length&&now-ycHist[0].t>1500)ycHist.shift();
+  handDbg=`размах ${scale.toFixed(2)} рост ${gr.toFixed(2)} поза ${upose||'-'}`;
+  if(upose==='rock'){if(!rock0)rock0=now}else rock0=0;
+  if(rock0&&now-rock0>600&&now-lastRps>3500&&!['rps','handsup','shot','crazy','hide','panic','peek','spin','exit','wake','startle'].includes(st)){
+    rock0=0;go('rps',12000,{phase:'pump',count:0,tb:now,period:.62});
+  }
+  if(st==='rps'){if(stArg.phase==='pump'&&rpsPump())rpsBeat();return}
+  // --- жест «крутит у виска»: указательный у виска делает круги ---
+  if(st==='crazy')return;
+  if(face&&faceFresh()&&sI>.75&&sM<.8&&sR<.8&&sP<.8){
+    const tp=L[8],dT=Math.min(Math.hypot(tp.x-face.tl.x,tp.y-face.tl.y),Math.hypot(tp.x-face.tr.x,tp.y-face.tr.y));
+    if(dT<face.wd*.4){
+      twHist.push({t:now,x:tp.x,y:tp.y});while(twHist.length&&now-twHist[0].t>1600)twHist.shift();
+      if(twHist.length>=8){
+        let cx0=0,cy0=0;for(const q of twHist){cx0+=q.x;cy0+=q.y}cx0/=twHist.length;cy0/=twHist.length;
+        let rs=0,acc=0,pa=null;
+        for(const q of twHist){rs+=Math.hypot(q.x-cx0,q.y-cy0);const a2=Math.atan2(q.y-cy0,q.x-cx0);if(pa!==null){let d=a2-pa;while(d>Math.PI)d-=2*Math.PI;while(d<-Math.PI)d+=2*Math.PI;acc+=d}pa=a2}
+        const rm=rs/twHist.length;
+        if(Math.abs(acc)>Math.PI*2.2&&rm>.012&&rm<.1&&now-lastCrazy>4500&&!['rps','handsup','shot','hide','panic'].includes(st)){lastCrazy=now;twHist=[];go('crazy',4300,{})}
+      }
+    }else twHist=[];
+  }else twHist=[];
   
   // палец указывает в сторону: существо уходит за край экрана
   const ext=(a,b,c)=>Math.hypot(L[a].x-L[c].x,L[a].y-L[c].y)>Math.hypot(L[b].x-L[c].x,L[b].y-L[c].y)*1.15;
@@ -155,7 +216,7 @@ function turns(key,th){
 function headGesture(){
   if(faceHist.length<8)return null;
   // чёткий поворот или кивок: большой размах, минимум три смены направления для кивка и две для поворота
-  const cy=turns('yaw',.11),cp=Math.min(turns('pitch',.07),turns('py',.035));
+  const cy=turns('yaw',.11),cp=Math.max(turns('pitch',.045),turns('py',.022));
   if(cy>=2&&cy>=cp)return 'shake';
   if(cp>=3)return 'nod';
   // наклон к плечу: большой угол, держится дольше полсекунды, голова при этом не поворачивается и не кивает
@@ -187,16 +248,19 @@ function onFace(L,bs){
     wide=a('eyeWideLeft','eyeWideRight'),press=a('mouthPressLeft','mouthPressRight'),sneer=a('noseSneerLeft','noseSneerRight'),sq=a('eyeSquintLeft','eyeSquintRight'),
     jaw=sm('jawOpen',B.jawOpen||0),bi=sm('browInnerUp',B.browInnerUp||0),tongue=sm('tongueOut',B.tongueOut||0),pucker=sm('mouthPucker',B.mouthPucker||0),puff=sm('cheekPuff',B.cheekPuff||0);
   const bl=B.eyeBlinkLeft||0,br=B.eyeBlinkRight||0;
+  const mw=Math.hypot(L[61].x-L[291].x,L[61].y-L[291].y)/wd;
+  if(bsl.mw===undefined)bsl.mw=mw;
+  const narrow=Math.max(0,(bsl.mw-mw)/Math.max(.05,bsl.mw));
   // сравниваем не с нулём, а с твоим спокойным лицом (медленно подстраивается)
   const keys={smile,bd,frown,wide,press,sneer,sq,jaw,bi,tongue,pucker,puff},D={};
   for(const k in keys){if(bsl[k]===undefined)bsl[k]=keys[k];D[k]=Math.max(0,keys[k]-bsl[k])}
   let kind=null;
   if(Math.abs(bl-br)>.5&&Math.max(bl,br)>.6)kind='wink';
-  else if(D.tongue>.35)kind='silly';
+  else if(D.tongue>.3)kind='silly';
   else if(D.smile>.5&&D.jaw>.22)kind='laugh';
   else if(D.smile>.4)kind='smile';
   else if(D.puff>.45)kind='puff';
-  else if(D.pucker>.55)kind='love';
+  else if((D.pucker>.4||(narrow>.22&&D.pucker>.15))&&D.smile<.2&&D.jaw<.4)kind='love';
   else if(D.jaw>.5&&D.sq>.2&&D.bi<.3)kind='yawn';
   else if(D.jaw>.3&&(D.bi>.35||D.wide>.3))kind='surprise';
   else if((D.bd>.2&&(D.press>.05||D.frown>.05||D.sneer>.08||D.sq>.15))||D.bd>.32)kind='anger';
@@ -204,7 +268,8 @@ function onFace(L,bs){
   if(kind!==expC){expC=kind;expT=now}
   const rate=kind===null?.02:(now-expT>6000?.01:0);
   if(rate)for(const k in keys)bsl[k]+=(keys[k]-bsl[k])*rate;
-  face={gx:(.5-n.x)*2,gy:(n.y-.5)*1.6,roll,yaw,pitch,kind,smile:D.smile,jaw:D.jaw,bl,br,bd:D.bd,frown:D.frown,bi:D.bi};faceSeen=now;
+  if(rate)bsl.mw+=(mw-bsl.mw)*rate;
+  face={gx:(.5-n.x)*2,gy:(n.y-.5)*1.6,roll,yaw,pitch,kind,smile:D.smile,jaw:D.jaw,bl,br,bd:D.bd,frown:D.frown,bi:D.bi,tl:L[251],tr:L[21],wd};faceSeen=now;
   ys=ys*.4+yaw*.6;ps=ps*.4+pitch*.6;rs=rs*.4+roll*.6;pys=pys*.4+py*.6;faceHist.push({t:now,yaw:ys,pitch:ps,roll:rs,py:pys});while(faceHist.length&&now-faceHist[0].t>1500)faceHist.shift();
   if((st!=='awake'&&st!=='mirror')||now-lastT<1500)return;
   if(kind&&now-expT>(kind==='laugh'||kind==='wink'?250:kind==='anger'||kind==='sad'?200:300)){mirror(kind,kind==='yawn'?2600:kind==='anger'||kind==='sad'?3000:1800);return}
@@ -385,7 +450,7 @@ function startAntic(){
 }
 
 function beh(t){
-  const p=now-st0;spd=.12;gk=.16;
+  const p=now-st0;spd=.12;gk=.16;armPose=null;rpsHand=null;
   if(now>nextWander){wx=(rnd()-.5)*1.2;wy=(rnd()-.5)*.8;nextWander=now+900+rnd()*2600;if(rnd()<.2){wx*=1.6;nextWander=now+1200}}
   switch(st){
   case 'awake':{
@@ -481,7 +546,12 @@ function beh(t){
       once(awwSnd);ev(2800,()=>tone(520,440,.7,'sine',.1,5));
     }
     else if(k==='surprise'){const j=Math.max(0,1-p/350);S('wow',{sc:1+.12*j,oy:-.05*j,shake:.5*j});once(wowSnd)}
-    else if(k==='silly'){S('silly',{tilt:Math.sin(t2*7)*.16,ox:Math.sin(t2*6)*.08,oy:-ab(Math.sin(t2*6))*.02});ev(500,raspSnd)}
+    else if(k==='silly'){
+      // показывает язык в ответ и часто-часто мелко трясёт головой
+      const o=Math.sin(t2*30);
+      S('bleh',{yaw:o*.14,tilt:Math.sin(t2*30+1)*.05,ox:o*.012,oy:-ab(Math.sin(t2*15))*.006,tpos:0});
+      spd=.5;ev(380,raspSnd);
+    }
     else if(k==='love'){S('love',{sc:1+.05*Math.sin(t2*5),oy:-ab(Math.sin(t2*3))*.025,tilt:Math.sin(t2*2)*.12});once(kissSnd)}
     else if(k==='wink'){const l=fg&&fg.bl>fg.br,j=Math.max(0,1-p/250);S('wink',{lidL:l?.05:1,lidR:l?1:.05,tilt:(l?-1:1)*.12,sc:1+.06*j,oy:-.02*j});once(winkSnd)}
     else if(k==='puff'){S('puff',{sc:1.1+.03*Math.sin(t2*6),shake:.4});once(popSnd)}
@@ -521,6 +591,76 @@ function beh(t){
     else{
       if(!stArg.r){stArg.r=1;tone(300,900,.25,'sine',.15);whoosh(.4,300,1200,.1)}
       S('scared',{eye:1,open:.2,shake:.3,oy:0,a:1});tx=Math.sin(p*.012)*.8;ty=0;spd=.12
+    }
+    break}
+  case 'flinch':{
+    const s=stArg.side||1;
+    S('scared',{eye:1.35,open:.3,lift:1,sc:.88,oy:-.05,tilt:-s*.15,yaw:-s*.3,pitch:-.15,shake:.6});spd=.45;gk=.3;
+    if(handFresh()){tx=(.5-hand.x)*2.2;ty=(hand.y-.5)*2.2}
+    if(!stArg.i){stArg.i=1;squeak()}
+    break}
+  case 'crazy':{
+    // «ты что, с ума сошёл?»: хмуро показывает на тебя, крутит пальцем у своего виска, высокомерно отворачивается с закрытыми глазами
+    const fg=faceFresh()?face:null,d=stArg.d||(stArg.d=rnd()<.5?-1:1);
+    spd=.14;
+    if(p<1100){
+      S('displeased',{eye:.55,brow:1,lift:-.4,curve:-.5,w:.7,yaw:-.1,pitch:.08});
+      armPose='point';armP=Math.min(1,p/350);
+      if(fg){tx=fg.gx;ty=fg.gy}
+      if(!stArg.a){stArg.a=1;tone(250,200,.3,'sawtooth',.1,10)}
+    }else if(p<2900){
+      S('smug',{eye:.5,lidL:.8,brow:.6,lift:-.2,curve:-.15,yaw:.15,tilt:-.08});
+      armPose='twirl';armP=Math.min(1,(p-1100)/350);
+      if(fg){tx=fg.gx;ty=fg.gy*.5}
+      if(now-(stArg.ts||0)>520){stArg.ts=now;seq([700,900,700,900],.07,'sine',.1,.1)}
+    }else{
+      S('sulk',{eye:.05,yaw:d*.5,pitch:-.25,ox:d*.04,curve:-.4,lift:-.3,tilt:d*.08});
+      if(!stArg.h){stArg.h=1;whoosh(.5,700,250,.07);tone(240,180,.35,'sawtooth',.08,14)}
+    }
+    break}
+  case 'rps':{
+    // цу-е-фа: кулак, три встряхивания, жест, победа, поражение или ничья
+    const a=stArg,fg=faceFresh()?face:null,per=a.period*1000,pp=(1+Math.cos(2*Math.PI*(now-a.tb)/per))/2,sn=Math.sin;
+    if(fg){tx=fg.gx;ty=fg.gy}
+    spd=.14;
+    if(a.phase==='pump'){
+      S('curious',{eye:.95,lift:.5,curve:.45,oy:pp*.012});
+      rpsHand={g:'rock',lift:(1-pp)*.15,a:1};
+      if(now-a.tb>per+260&&now-lastBeatT>350)rpsBeat();
+      if(now-handSeen>1500||now-st0>9000){a.phase='cancel';a.t1=now;askSnd()}
+    }else if(a.phase==='reveal'){
+      S('curious',{eye:1.15,lift:.7,curve:.2});
+      rpsHand={g:a.cg,lift:.12,a:1};
+      if(now-a.tr>1000){
+        const vs=poseHist.filter(q=>q.p&&q.t>=a.tr-100&&q.t<=a.tr+900),cnt={};
+        for(const q of vs)cnt[q.p]=(cnt[q.p]||0)+1;
+        let ug=null,best=0;for(const k2 in cnt)if(cnt[k2]>best){best=cnt[k2];ug=k2}
+        if(best<2)ug=null;
+        const beats={rock:'scissors',scissors:'paper',paper:'rock'};
+        a.ug=ug;a.res=!ug?'unknown':ug===a.cg?'draw':(beats[a.cg]===ug?'win':'lose');
+        rpsLast=a.cg+' vs '+(ug||'?')+' => '+a.res;
+        a.phase='result';a.t1=now;a.v=Math.floor(rnd()*3);lastRps=now;
+      }
+    }else if(a.phase==='result'){
+      const d2=now-a.t1,rv=a.res,v=a.v;
+      rpsHand={g:a.cg,lift:rv==='win'?.1+.06*Math.abs(sn(t*7)):.08,a:rv==='lose'?Math.max(0,1-Math.max(0,d2-1400)/700):1};
+      if(d2<450){S('wow',{eye:1.3,open:.35});if(!a.s0){a.s0=1;jolt()}}
+      else if(rv==='win'){
+        S('laugh',{open:.2+.16*Math.abs(sn(t*12)),oy:-Math.abs(sn(t*9))*.04,yaw:sn(t*5)*.25,tilt:sn(t*6)*.1,ox:sn(t*3)*.03});spd=.25;
+        if(!a.f){a.f=1;seq([523,659,784,1047],.12,'triangle',.18,.2)}
+        if(now-(a.ts||0)>420){a.ts=now;haSnd()}
+      }else if(rv==='draw'){
+        S('giggle',{tilt:sn(t*6)*.12,yaw:sn(t*4)*.2});
+        if(now-(a.ts||0)>900){a.ts=now;giggleSnd()}
+      }else if(rv==='lose'){
+        if(v===0){S('sulk',{yaw:-.5,ox:-.05,oy:.04});if(!a.f){a.f=1;sadSnd()}}
+        else if(v===1){S('angry',{shake:1.4,tilt:sn(t*28)*.1,ox:sn(t*31)*.02,eye:.6});spd=.3;if(now-(a.ts||0)>1300){a.ts=now;tone(160,70,.9,'sawtooth',.14,30)}}
+        else{S('sad',{shake:.8,eye:1.2,tilt:sn(t*3)*.06,pitch:.2,oy:.04});if(!a.f){a.f=1;seq([440,392,349,330],.2,'sine',.14,.3,6)}}
+      }else{S('curious',{tilt:.15,lift:.7});if(!a.f){a.f=1;askSnd()}}
+      if(d2>3000){lastRps=now;go('awake',0,{},true)}
+    }else{
+      S('curious',{tilt:.12,lift:.6});rpsHand={g:'rock',lift:.05,a:Math.max(0,1-(now-a.t1)/700)};
+      if(now-a.t1>900){lastRps=now;go('awake',0,{},true)}
     }
     break}
   case 'spin':{
@@ -613,6 +753,50 @@ function updateState(){
 /* ---------- рисование ---------- */
 function glow(){g.shadowColor='#5ff5ff';g.shadowBlur=U*.06*Math.max(.2,cur.gl);g.strokeStyle=g.fillStyle=cur.gl>1.3?'#c4fcff':cur.gl<.7?'#6fd9e3':'#8ffaff'}
 let gx=0,gy=0;
+function drawRArm(cx,cy,t){
+  if(!armPose)return;
+  const e=armP*armP*(3-2*armP),rise=(1-e)*.9*U;
+  g.save();glow();g.lineWidth=.03*U;g.lineCap='round';g.lineJoin='round';
+  const S0=[cx+.32*U,cy+.85*U+rise];
+  if(armPose==='point'){
+    const E2=[cx+.5*U,cy+.52*U+rise],F=[cx+.3*U,cy+.38*U+rise],T=[cx+.2*U,cy+.3*U+rise];
+    g.beginPath();g.moveTo(S0[0],S0[1]);g.lineTo(E2[0],E2[1]);g.lineTo(F[0],F[1]);g.stroke();
+    g.beginPath();g.arc(F[0],F[1],.05*U,0,6.3);g.stroke();
+    g.beginPath();g.moveTo(F[0]-.03*U,F[1]-.03*U);g.lineTo(T[0],T[1]);g.stroke();
+    g.beginPath();g.arc(T[0],T[1],.014*U,0,6.3);g.fill();
+  }else{
+    const E2=[cx+.48*U,cy+.42*U+rise],F=[cx+.41*U,cy-.02*U+rise],tb=[cx+.31*U,cy-.21*U+rise];
+    const tp=[tb[0]+Math.cos(t*14)*.03*U,tb[1]+Math.sin(t*14)*.03*U];
+    g.beginPath();g.moveTo(S0[0],S0[1]);g.lineTo(E2[0],E2[1]);g.lineTo(F[0],F[1]);g.stroke();
+    g.beginPath();g.arc(F[0],F[1],.05*U,0,6.3);g.stroke();
+    g.beginPath();g.moveTo(F[0]-.03*U,F[1]-.04*U);g.lineTo(tp[0],tp[1]);g.stroke();
+    g.globalAlpha=.5;g.lineWidth=.012*U;g.beginPath();g.arc(tb[0],tb[1],.03*U,0,6.3);g.stroke();
+  }
+  g.restore();
+}
+function drawRps(cx,cy){
+  const h=rpsHand,s=.11*U,hx=cx,hy=cy+.66*U-h.lift*U;
+  g.save();glow();g.globalAlpha=Math.max(0,Math.min(1,h.a));
+  g.lineWidth=.03*U;g.lineCap='round';g.lineJoin='round';
+  g.beginPath();g.moveTo(hx-.65*s,hy+.8*s);g.lineTo(hx-.8*s,cy+1.4*U);g.moveTo(hx+.65*s,hy+.8*s);g.lineTo(hx+.8*s,cy+1.4*U);g.stroke();
+  const rr=(x,y,w,hh,r)=>{g.beginPath();g.roundRect(x,y,w,hh,r);g.stroke()};
+  if(h.g==='rock'){
+    rr(hx-s,hy-.75*s,2*s,1.5*s,s*.45);
+    g.beginPath();for(const i of[-.5,0,.5]){g.moveTo(hx+i*s,hy-.75*s);g.lineTo(hx+i*s,hy-.15*s)}g.stroke();
+    g.beginPath();g.arc(hx-s*.95,hy+.15*s,.38*s,Math.PI*.5,Math.PI*1.5);g.stroke();
+  }else if(h.g==='paper'){
+    rr(hx-.85*s,hy-.2*s,1.7*s,1.35*s,s*.3);
+    for(let i=0;i<4;i++){const fx=hx-.72*s+i*.48*s,fl=(i===1||i===2?1.5:1.25)*s;rr(fx-.17*s,hy-.2*s-fl,.34*s,fl+.1*s,.17*s)}
+    g.beginPath();g.moveTo(hx-.85*s,hy+.55*s);g.lineTo(hx-1.5*s,hy+.1*s);g.stroke();
+  }else{
+    rr(hx-.8*s,hy-.1*s,1.6*s,1.2*s,s*.3);
+    g.lineWidth=.045*U;
+    g.beginPath();g.moveTo(hx-.28*s,hy-.1*s);g.lineTo(hx-.85*s,hy-1.9*s);g.moveTo(hx+.28*s,hy-.1*s);g.lineTo(hx+.85*s,hy-1.9*s);g.stroke();
+    g.lineWidth=.03*U;
+    g.beginPath();g.arc(hx+.35*s,hy+.1*s,.22*s,0,6.3);g.moveTo(hx+.75*s,hy+.1*s);g.arc(hx+.55*s,hy+.1*s,.2*s,0,6.3);g.stroke();
+  }
+  g.restore();
+}
 function draw(t){
   g.clearRect(0,0,W,H);
   if(cur.a<.02)return;
@@ -657,7 +841,21 @@ function draw(t){
   g.globalAlpha*=Math.max(0,Math.min(1,cur.ma));
   const my=.2*U;g.save();place(0,my);g.lineWidth=.035*U;g.lineCap='round';g.beginPath();
   let tooth=null;
-  if(cur.teeth>.3&&cur.open>.08){
+  if(cur.lips>.5){
+    // настоящие губы трубочкой: верхняя с «луком Амура», нижняя полная, щель и складочки по бокам
+    const lw=.085*U,u1=.06*U,l1=.085*U;
+    g.lineJoin='round';
+    g.moveTo(-lw,my);
+    g.quadraticCurveTo(-lw*.55,my-u1*1.2,-lw*.12,my-u1*.8);
+    g.quadraticCurveTo(0,my-u1*.5,lw*.12,my-u1*.8);
+    g.quadraticCurveTo(lw*.55,my-u1*1.2,lw,my);
+    g.bezierCurveTo(lw*.9,my+l1*1.05,-lw*.9,my+l1*1.05,-lw,my);
+    g.closePath();g.fill();
+    g.beginPath();g.strokeStyle='#05070a';g.lineWidth=.012*U;
+    g.moveTo(-lw*.82,my+.002*U);g.quadraticCurveTo(0,my+.016*U,lw*.82,my+.002*U);g.stroke();
+    g.strokeStyle=g.fillStyle;
+    g.beginPath();
+  }else if(cur.teeth>.3&&cur.open>.08){
     // детская улыбка: ровный верх, круглый низ и ряд маленьких зубок
     const hw=.2*U*cur.w,dpt=Math.max(.2,cur.curve)*.09*U,depth=cur.open*.6*U+dpt/2;
     g.lineJoin='round';
@@ -682,7 +880,7 @@ function draw(t){
   if(cur.tongue>.3){
     const tw2=.07*U,hw2=.2*U*cur.w;
     g.save();g.globalAlpha*=Math.min(1,cur.tongue);
-    g.beginPath();g.roundRect(hw2*.35,my-.01*U,tw2,.095*U,[0,0,tw2*.5,tw2*.5]);g.fill();
+    g.beginPath();g.roundRect(cur.tpos<.1?-tw2/2:hw2*cur.tpos,my-.01*U,tw2,.095*U,[0,0,tw2*.5,tw2*.5]);g.fill();
     g.restore();
   }
   g.restore();
@@ -699,6 +897,8 @@ function draw(t){
     }
     g.restore();
   }
+  drawRArm(cx,cy,t);
+  if(rpsHand)drawRps(cx,cy);
   zs=zs.filter(z=>now-z.t0<3300);
   if(zs.length){
     g.save();glow();
@@ -717,11 +917,13 @@ function draw(t){
 function drawDbg(){
   if(!dbg)return;
   g.save();g.shadowBlur=0;g.fillStyle='#8ffaff';g.font='12px monospace';
-  const T=[`v8 state:${st} cam:${camOK} mic:${micOK} audio:${ac&&ac.state}`,
+  const T=[`v9 state:${st} cam:${camOK} mic:${micOK} audio:${ac&&ac.state}`,
     `hand:${handFresh()?'yes':'no'} size:${hand?hand.sz.toFixed(2):'-'} speed:${hand?hand.v.toFixed(2):'-'}`,
     `face:${faceFresh()?'yes':'no'} peak:${lastPk.toFixed(2)} avg:${avg.toFixed(3)} claps:${claps.length}`,
     `absent:${absent} courage:${courage.toFixed(2)}`,
     `gun: ${handFresh()?gunDbg:'рука не видна'}`,
+    `hand: ${handFresh()?handDbg:'-'}`,
+    `цу-е-фа: ${rpsLast||'-'}`,
     `exp:${face&&face.kind||'-'} smile:${face?face.smile.toFixed(2):'-'} jaw:${face?face.jaw.toFixed(2):'-'}`,
     `brow-down:${face?face.bd.toFixed(2):'-'} frown:${face?face.frown.toFixed(2):'-'} brow-up:${face?face.bi.toFixed(2):'-'}`];
   T.forEach((x,i)=>g.fillText(x,10,24+i*16));
@@ -737,7 +939,7 @@ function detect(){
   if(!camOK||document.hidden||vid.readyState<2||now-lastDet<45)return;
   lastDet=now;detTick++;
   try{
-    if(detTick%2&&handLM){const r=handLM.detectForVideo(vid,now);if(r.landmarks&&r.landmarks[0])onHand(r.landmarks[0]);else if(hand&&hand.sz>.3&&hand.v>1.15&&now-handSeen<500&&!['panic','hide','sleep','drowsy','wake','handsup','shot'].includes(st))go('panic',1300,{v:Math.floor(rnd()*3),side:hand.x<.5?1:-1})}
+    if(detTick%2&&handLM){const r=handLM.detectForVideo(vid,now);if(r.landmarks&&r.landmarks[0])onHand(r.landmarks[0]);else if(hand&&hand.scale>.45&&hand.gr>1.15&&now-handSeen<500&&!['panic','hide','sleep','drowsy','wake','handsup','shot'].includes(st))go('panic',1300,{v:Math.floor(rnd()*3),side:hand.x<.5?1:-1})}
     else if(faceLM){const r=faceLM.detectForVideo(vid,now);if(r.faceLandmarks&&r.faceLandmarks[0])onFace(r.faceLandmarks[0],r.faceBlendshapes&&r.faceBlendshapes[0])}
   }catch(e){}
 }
