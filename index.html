@@ -78,7 +78,7 @@ let courage=.5,clapLike=.3,petLike=.3,lastAct=0;
 
 /* ---------- восприятие ---------- */
 let camOK=false,micOK=false,hand=null,face=null,handSeen=-1e9,faceSeen=-1e9;
-let rpsLast='',scaleHist=[],lastFlinch=0,twHist=[],poseHist=[],ycHist=[],rock0=0,lastRps=-1e9,lastBeatT=0,lastCrazy=-1e9,handDbg='',armPose=null,armP=0,rpsHand=null,lastHandL=null,gun0=0,gunDbg='-',ssz=0,handHist=[],tipHist=[],swipeN=0,swipeDir=1,lastSwipe=-1e9,ptHist=[],ptLast=0,ptDir=0,rpsWords=[];
+let rpsLast='',scaleHist=[],lastFlinch=0,twHist=[],poseHist=[],ycHist=[],rock0=0,lastRps=-1e9,lastBeatT=0,lastCrazy=-1e9,handDbg='',armPose=null,armP=0,rpsHand=null,lastHandL=null,gun0=0,gunDbg='-',ssz=0,handHist=[],tipHist=[],swipeN=0,swipeDir=1,lastSwipe=-1e9,ptHist=[],ptLast=0,ptDir=0,rpsWords=[],twLast=0;
 let handLM=null,faceLM=null,detTick=0,lastDet=0;
 const handFresh=()=>now-handSeen<900, faceFresh=()=>now-faceSeen<900;
 const handNear=()=>handFresh()&&hand.sz>.22;
@@ -86,14 +86,14 @@ const handNear=()=>handFresh()&&hand.sz>.22;
 function rpsPump(){
   const h=ycHist,n=h.length;if(n<5)return false;
   const a=h[n-3],b=h[n-2],c=h[n-1];
-  if(b.y>a.y&&b.y>=c.y&&now-lastBeatT>350){
+  if(b.y>a.y&&b.y>=c.y&&now-lastBeatT>550&&b.t>st0+150){
     const mn=Math.min(...h.map(q=>q.y));
     if(b.y-mn>.05)return true;
   }
   return false;
 }
 function rpsBeat(){
-  const a=stArg;a.count++;a.tb=now;lastBeatT=now;
+  const a=stArg;if(a.count>=1)a.period=Math.max(.6,Math.min(1.4,(now-lastBeatT)/1000));a.count++;a.tb=now;lastBeatT=now;
   const i=Math.min(2,a.count-1);
   rpsWords.push({t0:now,k:i});
   tone([420,480,560][i],[480,540,700][i],.18,'triangle',.2);
@@ -121,7 +121,7 @@ function onHand(L){
   const sI=fs(5,6,7,8),sM=fs(9,10,11,12),sR=fs(13,14,15,16),sP=fs(17,18,19,20);
   const dxg=L[8].x-L[5].x,dyg=L[8].y-L[5].y;
   const sideways=Math.abs(dxg)>Math.abs(dyg)*1.6&&Math.hypot(dxg,dyg)>.05;
-  const nearTemple=face&&faceFresh()&&Math.min(Math.hypot(L[8].x-face.tl.x,L[8].y-face.tl.y),Math.hypot(L[8].x-face.tr.x,L[8].y-face.tr.y))<face.wd*.4;
+  const nearTemple=face&&faceFresh()&&Math.min(Math.hypot(L[8].x-face.tl.x,L[8].y-face.tl.y),Math.hypot(L[8].x-face.tr.x,L[8].y-face.tr.y))<face.wd*.55;
   const gunPose=!sleeping&&!nearTemple&&sI>.8&&sM<.78&&sR<.78&&sP<.78&&!sideways;
   gunDbg=`указ ${sI.toFixed(2)} сред ${sM.toFixed(2)} безым ${sR.toFixed(2)} мизин ${sP.toFixed(2)} ${sideways?'вбок':'прямо'} = ${gunPose?'ПИСТОЛЕТ':'нет'}`;
   if(gunPose){
@@ -167,24 +167,25 @@ function onHand(L){
   handDbg=`размах ${scale.toFixed(2)} рост ${gr.toFixed(2)} поза ${upose||'-'}`;
   if(upose==='rock'){if(!rock0)rock0=now}else rock0=0;
   if(rock0&&now-rock0>600&&now-lastRps>3500&&!['rps','handsup','shot','crazy','hide','panic','peek','spin','exit','wake','startle'].includes(st)){
-    rock0=0;go('rps',12000,{phase:'pump',count:0,tb:now,period:1});
+    rock0=0;go('rps',16000,{phase:'pump',count:0,tb:now,period:1});
   }
   if(st==='rps'){if(stArg.phase==='pump'&&rpsPump())rpsBeat();return}
   // --- жест «крутит у виска»: указательный у виска делает круги ---
   if(st==='crazy')return;
-  if(face&&faceFresh()&&sI>.75&&sM<.8&&sR<.8&&sP<.8){
+  if(face&&faceFresh()&&sI>.6&&sM<.85&&sR<.85&&sP<.85){
     const tp=L[8],dT=Math.min(Math.hypot(tp.x-face.tl.x,tp.y-face.tl.y),Math.hypot(tp.x-face.tr.x,tp.y-face.tr.y));
-    if(dT<face.wd*.4){
-      twHist.push({t:now,x:tp.x,y:tp.y});while(twHist.length&&now-twHist[0].t>1600)twHist.shift();
-      if(twHist.length>=8){
+    if(dT<face.wd*.55){
+      twLast=now;
+      twHist.push({t:now,x:tp.x,y:tp.y});while(twHist.length&&now-twHist[0].t>1800)twHist.shift();
+      if(twHist.length>=6){
         let cx0=0,cy0=0;for(const q of twHist){cx0+=q.x;cy0+=q.y}cx0/=twHist.length;cy0/=twHist.length;
         let rs=0,acc=0,pa=null;
         for(const q of twHist){rs+=Math.hypot(q.x-cx0,q.y-cy0);const a2=Math.atan2(q.y-cy0,q.x-cx0);if(pa!==null){let d=a2-pa;while(d>Math.PI)d-=2*Math.PI;while(d<-Math.PI)d+=2*Math.PI;acc+=d}pa=a2}
         const rm=rs/twHist.length;
-        if(Math.abs(acc)>Math.PI*2.2&&rm>.012&&rm<.1&&now-lastCrazy>4500&&!['rps','handsup','shot','hide','panic'].includes(st)){lastCrazy=now;twHist=[];go('crazy',4300,{})}
+        if(Math.abs(acc)>Math.PI*1.5&&rm>.008&&rm<.12&&now-lastCrazy>4500&&!['rps','handsup','shot','hide','panic'].includes(st)){lastCrazy=now;twHist=[];go('crazy',4300,{})}
       }
-    }else twHist=[];
-  }else twHist=[];
+    }else if(now-twLast>600)twHist=[];
+  }else if(now-twLast>600)twHist=[];
   
   // палец указывает в сторону: существо уходит за край экрана
   const ext=(a,b,c)=>Math.hypot(L[a].x-L[c].x,L[a].y-L[c].y)>Math.hypot(L[b].x-L[c].x,L[b].y-L[c].y)*1.15;
@@ -643,12 +644,12 @@ function beh(t){
     spd=.14;
     if(p<1100){
       S('displeased',{eye:.55,brow:1,lift:-.4,curve:-.5,w:.7,yaw:-.1,pitch:.08});
-      armPose='point';armP=Math.min(1,p/350);
+      armPose='twirl';armP=Math.min(1,p/250);
       if(fg){tx=fg.gx;ty=fg.gy}
       if(!stArg.a){stArg.a=1;tone(250,200,.3,'sawtooth',.1,10)}
     }else if(p<2900){
       S('smug',{eye:.5,lidL:.8,brow:.6,lift:-.2,curve:-.15,yaw:.15,tilt:-.08});
-      armPose='twirl';armP=Math.min(1,(p-1100)/350);
+      armPose='twirl';armP=1;
       if(fg){tx=fg.gx;ty=fg.gy*.5}
       if(now-(stArg.ts||0)>520){stArg.ts=now;seq([700,900,700,900],.07,'sine',.1,.1)}
     }else{
@@ -662,10 +663,15 @@ function beh(t){
     if(fg){tx=fg.gx;ty=fg.gy}
     spd=.14;
     if(a.phase==='pump'){
-      S('curious',{eye:.95,lift:.5,curve:.45,oy:pp*.012});
-      rpsHand={g:'rock',lift:(1-pp)*.15,a:1};
-      if(now-a.tb>per+260&&now-lastBeatT>350)rpsBeat();
-      if(now-handSeen>1500||now-st0>9000){a.phase='cancel';a.t1=now;askSnd()}
+      // кулак выезжает как у тебя; счёт начинается только когда ты сам начал махать кулаком
+      const started=a.count>0;
+      S('curious',{eye:.95,lift:.5,curve:.45,oy:started?pp*.012:0});
+      if(a.lf===undefined)a.lf=-.7;
+      const tl=started?(1-pp)*.15:.15;
+      a.lf+=(tl-a.lf)*(p<700?.12:.35);
+      rpsHand={g:'rock',lift:a.lf,a:Math.min(1,p/300)};
+      if(started&&now-a.tb>per*1.35&&now-lastBeatT>550)rpsBeat();
+      if(now-handSeen>1500||now-st0>14000){a.phase='cancel';a.t1=now;askSnd()}
     }else if(a.phase==='reveal'){
       S('curious',{eye:1.15,lift:.7,curve:.2});
       rpsHand={g:a.cg,lift:.12,a:1};
@@ -791,48 +797,57 @@ function updateState(){
 /* ---------- рисование ---------- */
 function glow(){g.shadowColor='#5ff5ff';g.shadowBlur=U*.06*Math.max(.2,cur.gl);g.strokeStyle=g.fillStyle=cur.gl>1.3?'#c4fcff':cur.gl<.7?'#6fd9e3':'#8ffaff'}
 let gx=0,gy=0;
-function drawRArm(cx,cy,t){
-  if(!armPose)return;
-  const e=armP*armP*(3-2*armP),rise=(1-e)*.9*U;
-  g.save();glow();g.lineWidth=.03*U;g.lineCap='round';g.lineJoin='round';
-  const S0=[cx+.32*U,cy+.85*U+rise];
-  if(armPose==='point'){
-    const E2=[cx+.5*U,cy+.52*U+rise],F=[cx+.3*U,cy+.38*U+rise],T=[cx+.2*U,cy+.3*U+rise];
-    g.beginPath();g.moveTo(S0[0],S0[1]);g.lineTo(E2[0],E2[1]);g.lineTo(F[0],F[1]);g.stroke();
-    g.beginPath();g.arc(F[0],F[1],.05*U,0,6.3);g.stroke();
-    g.beginPath();g.moveTo(F[0]-.03*U,F[1]-.03*U);g.lineTo(T[0],T[1]);g.stroke();
-    g.beginPath();g.arc(T[0],T[1],.014*U,0,6.3);g.fill();
+function toonHand(x,y,kind,u,rot,alpha,fl){
+  const P=[];
+  const E=(cx,cy,rx,ry)=>P.push({e:1,cx,cy,rx,ry}),C=(x1,y1,x2,y2,w)=>P.push({x1,y1,x2,y2,w});
+  if(kind==='paper'){
+    E(0,.2,.95,.8);
+    [[-.57,-1.15],[-.19,-1.4],[.19,-1.25],[.57,-.98]].forEach(([fx,fy])=>C(fx,-.3,fx,fy,.36));
+    C(-.75,.45,-1.25,-.05,.42);
   }else{
-    const E2=[cx+.48*U,cy+.42*U+rise],F=[cx+.41*U,cy-.02*U+rise],tb=[cx+.31*U,cy-.21*U+rise];
-    const tp=[tb[0]+Math.cos(t*14)*.03*U,tb[1]+Math.sin(t*14)*.03*U];
-    g.beginPath();g.moveTo(S0[0],S0[1]);g.lineTo(E2[0],E2[1]);g.lineTo(F[0],F[1]);g.stroke();
-    g.beginPath();g.arc(F[0],F[1],.05*U,0,6.3);g.stroke();
-    g.beginPath();g.moveTo(F[0]-.03*U,F[1]-.04*U);g.lineTo(tp[0],tp[1]);g.stroke();
-    g.globalAlpha=.5;g.lineWidth=.012*U;g.beginPath();g.arc(tb[0],tb[1],.03*U,0,6.3);g.stroke();
+    E(0,.05,1,.85);
+    if(kind==='fist'){for(const bx of[-.66,-.22,.22,.66])E(bx,-.5,.34,.34)}
+    else if(kind==='scissors'){C(-.45,-.45,-.75,-1.55,.38);C(-.05,-.45,.25,-1.6,.38);E(.3,-.5,.32,.32);E(.68,-.4,.28,.28)}
+    else{C(-.45,-.45,-.45,-1.7,.38);E(-.02,-.5,.32,.32);E(.35,-.5,.32,.32);E(.7,-.4,.28,.28)}
+    C(-.8,.1,-.35,0,.42);
+  }
+  g.save();g.translate(x,y);g.rotate(rot||0);g.scale(u*(fl||1),u);
+  g.globalAlpha=Math.max(0,Math.min(1,g.globalAlpha*(alpha===undefined?1:alpha)));
+  g.lineJoin=g.lineCap='round';
+  const ol=.09;
+  g.shadowColor='rgba(255,255,255,.4)';g.shadowBlur=U*.03;
+  g.fillStyle=g.strokeStyle='#8fa2b6';
+  for(const q of P){
+    if(q.e){g.beginPath();g.ellipse(q.cx,q.cy,q.rx+ol,q.ry+ol,0,0,6.3);g.fill()}
+    else{g.lineWidth=q.w+2*ol;g.beginPath();g.moveTo(q.x1,q.y1);g.lineTo(q.x2,q.y2);g.stroke()}
+  }
+  g.shadowBlur=0;
+  const gr=g.createRadialGradient(-.3,-.45,.1,0,-.1,1.8);
+  gr.addColorStop(0,'#ffffff');gr.addColorStop(.55,'#f3f6fa');gr.addColorStop(1,'#c9d4e0');
+  g.fillStyle=g.strokeStyle=gr;
+  for(const q of P){
+    if(q.e){g.beginPath();g.ellipse(q.cx,q.cy,q.rx,q.ry,0,0,6.3);g.fill()}
+    else{g.lineWidth=q.w;g.beginPath();g.moveTo(q.x1,q.y1);g.lineTo(q.x2,q.y2);g.stroke()}
+  }
+  if(kind==='fist'){
+    g.strokeStyle='#aebccb';g.lineWidth=.05;
+    g.beginPath();for(const lx of[-.44,0,.44]){g.moveTo(lx,-.78);g.lineTo(lx,-.42)}g.stroke();
   }
   g.restore();
 }
+function drawRArm(cx,cy,t){
+  if(!armPose)return;
+  const e=armP*armP*(3-2*armP),rise=(1-e)*.9*U;
+  g.save();
+  // кручение пальцем у виска: кисть сразу у виска, кончик пальца смотрит на висок и крутится кругами
+  const hx=cx+.6*U+Math.cos(t*14)*.025*U,hy=cy-.06*U+rise+Math.sin(t*14)*.025*U;
+  toonHand(hx,hy,'point',.1*U,-Math.PI/2,1);
+  g.restore();
+}
 function drawRps(cx,cy){
-  const h=rpsHand,s=.11*U,hx=cx,hy=cy+.66*U-h.lift*U;
-  g.save();glow();g.globalAlpha=Math.max(0,Math.min(1,h.a));
-  g.lineWidth=.03*U;g.lineCap='round';g.lineJoin='round';
-  g.beginPath();g.moveTo(hx-.65*s,hy+.8*s);g.lineTo(hx-.8*s,cy+1.4*U);g.moveTo(hx+.65*s,hy+.8*s);g.lineTo(hx+.8*s,cy+1.4*U);g.stroke();
-  const rr=(x,y,w,hh,r)=>{g.beginPath();g.roundRect(x,y,w,hh,r);g.stroke()};
-  if(h.g==='rock'){
-    rr(hx-s,hy-.75*s,2*s,1.5*s,s*.45);
-    g.beginPath();for(const i of[-.5,0,.5]){g.moveTo(hx+i*s,hy-.75*s);g.lineTo(hx+i*s,hy-.15*s)}g.stroke();
-    g.beginPath();g.arc(hx-s*.95,hy+.15*s,.38*s,Math.PI*.5,Math.PI*1.5);g.stroke();
-  }else if(h.g==='paper'){
-    rr(hx-.85*s,hy-.2*s,1.7*s,1.35*s,s*.3);
-    for(let i=0;i<4;i++){const fx=hx-.72*s+i*.48*s,fl=(i===1||i===2?1.5:1.25)*s;rr(fx-.17*s,hy-.2*s-fl,.34*s,fl+.1*s,.17*s)}
-    g.beginPath();g.moveTo(hx-.85*s,hy+.55*s);g.lineTo(hx-1.5*s,hy+.1*s);g.stroke();
-  }else{
-    rr(hx-.8*s,hy-.1*s,1.6*s,1.2*s,s*.3);
-    g.lineWidth=.045*U;
-    g.beginPath();g.moveTo(hx-.28*s,hy-.1*s);g.lineTo(hx-.85*s,hy-1.9*s);g.moveTo(hx+.28*s,hy-.1*s);g.lineTo(hx+.85*s,hy-1.9*s);g.stroke();
-    g.lineWidth=.03*U;
-    g.beginPath();g.arc(hx+.35*s,hy+.1*s,.22*s,0,6.3);g.moveTo(hx+.75*s,hy+.1*s);g.arc(hx+.55*s,hy+.1*s,.2*s,0,6.3);g.stroke();
-  }
+  const h=rpsHand,hy=cy+.66*U-h.lift*U;
+  g.save();
+  toonHand(cx,hy,h.g==='rock'?'fist':h.g,.11*U,0,h.a);
   g.restore();
 }
 function draw(t){
@@ -877,7 +892,8 @@ function draw(t){
     g.restore();
   }
   g.globalAlpha*=Math.max(0,Math.min(1,cur.ma));
-  const my=.2*U;g.save();place(0,my);g.lineWidth=.035*U;g.lineCap='round';g.beginPath();
+  const kidK=cur.lips>.5?0:Math.max(0,Math.min(1,(cur.curve-.2)/.3))*Math.max(0,Math.min(1,(cur.open-.04)/.1));
+  const my=.2*U-.035*U*kidK;g.save();place(0,my);g.lineWidth=.035*U;g.lineCap='round';g.beginPath();
   let tooth=null;
   if(cur.lips>.5){
     // настоящие губы трубочкой: верхняя с «луком Амура», нижняя полная, щель и складочки по бокам
@@ -893,21 +909,20 @@ function draw(t){
     g.beginPath();g.ellipse(0,my+.006*U,.027*U,.03*U,0,0,Math.PI*2);g.fill();
     g.restore();
     g.beginPath();
-  }else if(cur.teeth>.3&&cur.open>.08){
-    // детская улыбка: ровный верх, круглый низ и ряд маленьких зубок
-    const hw=.2*U*cur.w,dpt=Math.max(.2,cur.curve)*.09*U,depth=cur.open*.6*U+dpt/2;
+  }else if((cur.teeth>.3&&cur.open>.08)||(cur.open>.08&&cur.curve>.3)){
+    // детский рот: небольшой, ровный верх, круглый низ и два зубика
+    const hw=.17*U*cur.w,dpt=Math.max(.2,cur.curve)*.08*U,depth=Math.min(.22*U,cur.open*.5*U+dpt/2);
     g.lineJoin='round';
     g.moveTo(-hw,my);g.quadraticCurveTo(0,my+dpt,hw,my);
     g.bezierCurveTo(hw*.98,my+depth*.72,hw*.5,my+depth,0,my+depth);
     g.bezierCurveTo(-hw*.5,my+depth,-hw*.98,my+depth*.72,-hw,my);g.closePath();
     tooth={hw,dpt,depth};
   }
-  else if(cur.open>.1&&cur.curve>.55){const hw=.2*U*cur.w,dp=cur.curve*.2*U;g.moveTo(-hw,my);g.quadraticCurveTo(0,my+dp,hw,my);g.quadraticCurveTo(0,my+dp+cur.open*.4*U,-hw,my);g.closePath()}
   else if(cur.open>.1)g.ellipse(0,my,.1*U*cur.w+.02*U,.11*U*cur.open,0,0,Math.PI*2);
   else{const hw=.2*U*cur.w;g.moveTo(-hw,my);g.quadraticCurveTo(0,my+cur.curve*.2*U,hw,my)}
   g.stroke();
   if(tooth){
-    const {hw,dpt,depth}=tooth,N=4,tw=.052*U,gap=.01*U,span=N*tw+(N-1)*gap,th=Math.min(.055*U,depth*.4);
+    const {hw,dpt,depth}=tooth,N=2,tw=.066*U,gap=.008*U,span=N*tw+(N-1)*gap,th=Math.min(.065*U,depth*.45);
     g.save();g.shadowBlur=0;g.clip();
     for(let i=0;i<N;i++){
       const x=-span/2+i*(tw+gap),u=(x+tw/2)/hw,yTop=my+dpt*(1-u*u)/2;
@@ -924,15 +939,9 @@ function draw(t){
   g.restore();
   g.restore();
   if(cur.arms>.02){
-    g.save();glow();g.globalAlpha=Math.min(1,cur.arms)*Math.max(0,Math.min(1,cur.a));
-    g.lineWidth=.03*U;g.lineCap='round';g.lineJoin='round';
+    g.save();g.globalAlpha=Math.min(1,cur.arms)*Math.max(0,Math.min(1,cur.a));
     const rise=(1-Math.min(1,cur.arms))*.9*U,tr=st==='handsup'?Math.sin(t*45)*.006*U:0;
-    for(const sd of[-1,1]){
-      const hx=cx+sd*.37*U+tr,hy=cy+.1*U+rise;
-      g.beginPath();g.moveTo(cx+sd*.26*U+tr,cy+.8*U+rise);g.lineTo(cx+sd*.42*U+tr,cy+.45*U+rise);g.lineTo(hx,hy);g.stroke();
-      g.beginPath();g.arc(hx,hy-.01*U,.045*U,0,Math.PI*2);g.stroke();
-      for(const a of[-.55,-.2,.2,.55]){g.beginPath();g.moveTo(hx+Math.sin(a)*.05*U,hy-.01*U-Math.cos(a)*.05*U);g.lineTo(hx+Math.sin(a)*.1*U,hy-.01*U-Math.cos(a)*.1*U);g.stroke()}
-    }
+    for(const sd of[-1,1])toonHand(cx+sd*.4*U+tr,cy+.2*U+rise,'paper',.085*U,sd*.15,1,sd);
     g.restore();
   }
   drawRArm(cx,cy,t);
