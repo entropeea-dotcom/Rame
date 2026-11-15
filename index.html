@@ -78,7 +78,7 @@ let courage=.5,clapLike=.3,petLike=.3,lastAct=0;
 
 /* ---------- восприятие ---------- */
 let camOK=false,micOK=false,hand=null,face=null,handSeen=-1e9,faceSeen=-1e9;
-let rpsLast='',scaleHist=[],lastFlinch=0,twHist=[],poseHist=[],ycHist=[],rock0=0,lastRps=-1e9,lastBeatT=0,lastCrazy=-1e9,handDbg='',armPose=null,armP=0,rpsHand=null,lastHandL=null,gun0=0,gunDbg='-',ssz=0,handHist=[],tipHist=[],swipeN=0,swipeDir=1,lastSwipe=-1e9,ptHist=[],ptLast=0,ptDir=0,rpsWords=[],twLast=0;
+let rpsLast='',scaleHist=[],lastFlinch=0,twHist=[],poseHist=[],ycHist=[],rock0=0,lastRps=-1e9,lastBeatT=0,lastCrazy=-1e9,handDbg='',armPose=null,armP=0,rpsHand=null,lastHandL=null,gun0=0,gunDbg='-',ssz=0,handHist=[],tipHist=[],swipeN=0,swipeDir=1,lastSwipe=-1e9,ptHist=[],ptLast=0,ptDir=0,rpsWords=[],twLast=0,gunLast=-1e9;
 let handLM=null,faceLM=null,detTick=0,lastDet=0;
 const handFresh=()=>now-handSeen<900, faceFresh=()=>now-faceSeen<900;
 const handNear=()=>handFresh()&&hand.sz>.22;
@@ -122,12 +122,16 @@ function onHand(L){
   const dxg=L[8].x-L[5].x,dyg=L[8].y-L[5].y;
   const sideways=Math.abs(dxg)>Math.abs(dyg)*1.6&&Math.hypot(dxg,dyg)>.05;
   const nearTemple=face&&faceFresh()&&Math.min(Math.hypot(L[8].x-face.tl.x,L[8].y-face.tl.y),Math.hypot(L[8].x-face.tr.x,L[8].y-face.tr.y))<face.wd*.55;
-  const gunPose=!sleeping&&!nearTemple&&sI>.8&&sM<.78&&sR<.78&&sP<.78&&!sideways;
-  gunDbg=`указ ${sI.toFixed(2)} сред ${sM.toFixed(2)} безым ${sR.toFixed(2)} мизин ${sP.toFixed(2)} ${sideways?'вбок':'прямо'} = ${gunPose?'ПИСТОЛЕТ':'нет'}`;
+  // пистолет: указательный прямой, остальные не вытянуты (можно прижать слабо), и либо палец смотрит почти в камеру, либо большой отведён
+  const sT=fs(1,2,3,4),fr2=Math.hypot(dxg,dyg)/Math.max(.02,sz),thumbOut=sT>.7&&Math.hypot(L[4].x-L[5].x,L[4].y-L[5].y)/Math.max(.02,sz)>.55;
+  const gunRaw=!sleeping&&!nearTemple&&sI>.7&&sM<.88&&sR<.88&&sP<.88&&(fr2<.8||thumbOut);
+  if(gunRaw)gunLast=now;
+  const gunPose=gunRaw||now-gunLast<350;
+  gunDbg=`указ ${sI.toFixed(2)} сред ${sM.toFixed(2)} безым ${sR.toFixed(2)} мизин ${sP.toFixed(2)} ракурс ${fr2.toFixed(2)} большой ${thumbOut?'да':'нет'} = ${gunPose?'ПИСТОЛЕТ':'нет'}`;
   if(gunPose){
     if(!gun0)gun0=now;
     if(st==='handsup')go('handsup',1300);
-    else if(now-gun0>600&&!['shot','hide','panic','peek','rps','crazy'].includes(st))go('handsup',1300);
+    else if(now-gun0>500&&!['shot','hide','panic','peek','rps','crazy'].includes(st))go('handsup',1300);
   }else gun0=0;
   // выстрел: резкий взмах пальцем (отдача), пока он стоит с поднятыми руками
   if(st==='handsup'&&now-st0>1000){
@@ -172,25 +176,27 @@ function onHand(L){
   if(st==='rps'){if(stArg.phase==='pump'&&rpsPump())rpsBeat();return}
   // --- жест «крутит у виска»: указательный у виска делает круги ---
   if(st==='crazy')return;
-  if(face&&faceFresh()&&sI>.6&&sM<.85&&sR<.85&&sP<.85){
+  if(face&&faceFresh()&&sI>.72&&sM<.72&&sR<.72&&sP<.72){
     const tp=L[8],dT=Math.min(Math.hypot(tp.x-face.tl.x,tp.y-face.tl.y),Math.hypot(tp.x-face.tr.x,tp.y-face.tr.y));
-    if(dT<face.wd*.55){
+    if(dT<face.wd*.5){
       twLast=now;
       twHist.push({t:now,x:tp.x,y:tp.y});while(twHist.length&&now-twHist[0].t>1800)twHist.shift();
-      if(twHist.length>=6){
+      if(twHist.length>=8){
         let cx0=0,cy0=0;for(const q of twHist){cx0+=q.x;cy0+=q.y}cx0/=twHist.length;cy0/=twHist.length;
-        let rs=0,acc=0,pa=null;
-        for(const q of twHist){rs+=Math.hypot(q.x-cx0,q.y-cy0);const a2=Math.atan2(q.y-cy0,q.x-cx0);if(pa!==null){let d=a2-pa;while(d>Math.PI)d-=2*Math.PI;while(d<-Math.PI)d+=2*Math.PI;acc+=d}pa=a2}
-        const rm=rs/twHist.length;
-        if(Math.abs(acc)>Math.PI*1.5&&rm>.008&&rm<.12&&now-lastCrazy>4500&&!['rps','handsup','shot','hide','panic'].includes(st)){lastCrazy=now;twHist=[];go('crazy',4300,{})}
+        let rs=0,acc=0,pa=null,np=0,nn=0;const rr2=[];
+        for(const q of twHist){const r2=Math.hypot(q.x-cx0,q.y-cy0);rs+=r2;rr2.push(r2);const a2=Math.atan2(q.y-cy0,q.x-cx0);if(pa!==null){let d=a2-pa;while(d>Math.PI)d-=2*Math.PI;while(d<-Math.PI)d+=2*Math.PI;acc+=d;if(d>0)np++;else nn++}pa=a2}
+        const rm=rs/twHist.length,rv=Math.sqrt(rr2.reduce((u,v)=>u+(v-rm)*(v-rm),0)/rr2.length);
+        // настоящий круг: больше полутора оборотов в одну сторону, ровный радиус, а не дрожание или взмахи
+        const oneWay=Math.max(np,nn)/Math.max(1,np+nn)>=.75;
+        if(Math.abs(acc)>Math.PI*2.2&&oneWay&&rm>.01&&rm<.09&&rv<rm*.6&&now-lastCrazy>4500&&!['rps','handsup','shot','hide','panic'].includes(st)){lastCrazy=now;twHist=[];go('crazy',4300,{})}
       }
-    }else if(now-twLast>600)twHist=[];
-  }else if(now-twLast>600)twHist=[];
+    }else if(now-twLast>250)twHist=[];
+  }else if(now-twLast>250)twHist=[];
   
   // палец указывает в сторону: существо уходит за край экрана
   const ext=(a,b,c)=>Math.hypot(L[a].x-L[c].x,L[a].y-L[c].y)>Math.hypot(L[b].x-L[c].x,L[b].y-L[c].y)*1.15;
   const dxp=L[8].x-L[5].x,dyp=L[8].y-L[5].y;
-  const pointing=!nearTemple&&ext(8,6,0)&&!ext(12,10,0)&&!ext(16,14,0)&&Math.abs(dxp)>Math.abs(dyp)*2&&Math.hypot(dxp,dyp)>.05;
+  const pointing=!nearTemple&&!gunPose&&ext(8,6,0)&&!ext(12,10,0)&&!ext(16,14,0)&&Math.abs(dxp)>Math.abs(dyp)*2&&Math.hypot(dxp,dyp)>.05;
   if(pointing){
     const dir=dxp>0?1:-1;
     if(ptDir!==dir||now-ptLast>400){ptDir=dir;ptHist=[]}
@@ -815,29 +821,20 @@ function toonHand(x,y,kind,u,rot,alpha,fl){
   g.save();g.translate(x,y);g.rotate(rot||0);g.scale(u*(fl||1),u);
   g.globalAlpha=Math.max(0,Math.min(1,g.globalAlpha*(alpha===undefined?1:alpha)));
   g.lineJoin=g.lineCap='round';
-  const ol=.09;
-  g.shadowColor='rgba(255,255,255,.4)';g.shadowBlur=U*.03;
-  g.fillStyle=g.strokeStyle='#8fa2b6';
-  for(const q of P){
-    if(q.e){g.beginPath();g.ellipse(q.cx,q.cy,q.rx+ol,q.ry+ol,0,0,6.3);g.fill()}
-    else{g.lineWidth=q.w+2*ol;g.beginPath();g.moveTo(q.x1,q.y1);g.lineTo(q.x2,q.y2);g.stroke()}
-  }
-  g.shadowBlur=0;
-  const gr=g.createRadialGradient(-.3,-.45,.1,0,-.1,1.8);
-  gr.addColorStop(0,'#ffffff');gr.addColorStop(.55,'#f3f6fa');gr.addColorStop(1,'#c9d4e0');
-  g.fillStyle=g.strokeStyle=gr;
+  glow();
   for(const q of P){
     if(q.e){g.beginPath();g.ellipse(q.cx,q.cy,q.rx,q.ry,0,0,6.3);g.fill()}
     else{g.lineWidth=q.w;g.beginPath();g.moveTo(q.x1,q.y1);g.lineTo(q.x2,q.y2);g.stroke()}
   }
-  if(kind!=='paper'){
-    g.strokeStyle='#aebccb';g.lineWidth=.5;g.beginPath();g.moveTo(-.8,.1);g.lineTo(-.35,0);g.stroke();
-    g.strokeStyle=gr;g.lineWidth=.42;g.beginPath();g.moveTo(-.8,.1);g.lineTo(-.35,0);g.stroke();
+  // внутри только тёмные складочки (как зрачок у глаза), внешнего контура нет
+  g.shadowBlur=0;g.strokeStyle='#05070a';g.lineWidth=.05;
+  g.beginPath();
+  if(kind==='paper'){for(const lx of[-.38,0,.38]){g.moveTo(lx,-.3);g.lineTo(lx,-.95)}}
+  else{
+    if(kind==='fist'){for(const lx of[-.44,0,.44]){g.moveTo(lx,-.78);g.lineTo(lx,-.42)}}
+    g.moveTo(-.35,-.22);g.quadraticCurveTo(-.1,.05,-.35,.3);
   }
-  if(kind==='fist'){
-    g.strokeStyle='#aebccb';g.lineWidth=.05;
-    g.beginPath();for(const lx of[-.44,0,.44]){g.moveTo(lx,-.78);g.lineTo(lx,-.42)}g.stroke();
-  }
+  g.stroke();
   g.restore();
 }
 function drawRArm(cx,cy,t){
