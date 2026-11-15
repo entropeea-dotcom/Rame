@@ -78,7 +78,7 @@ let courage=.5,clapLike=.3,petLike=.3,lastAct=0;
 
 /* ---------- восприятие ---------- */
 let camOK=false,micOK=false,hand=null,face=null,handSeen=-1e9,faceSeen=-1e9;
-let rpsLast='',scaleHist=[],lastFlinch=0,twHist=[],poseHist=[],ycHist=[],rock0=0,lastRps=-1e9,lastBeatT=0,lastCrazy=-1e9,handDbg='',armPose=null,armP=0,rpsHand=null,lastHandL=null,gun0=0,gunDbg='-',ssz=0,handHist=[],tipHist=[],swipeN=0,swipeDir=1,lastSwipe=-1e9,ptHist=[],ptLast=0,ptDir=0,rpsWords=[],twLast=0,gunLast=-1e9;
+let rpsLast='',scaleHist=[],lastFlinch=0,twHist=[],poseHist=[],ycHist=[],rock0=0,lastRps=-1e9,lastBeatT=0,lastCrazy=-1e9,handDbg='',armPose=null,armP=0,rpsHand=null,lastHandL=null,gun0=0,gunDbg='-',ssz=0,handHist=[],tipHist=[],swipeN=0,swipeDir=1,lastSwipe=-1e9,ptHist=[],ptLast=0,ptDir=0,rpsWords=[],twLast=0,gunLast=-1e9,relHist=[],twProg=0;
 let handLM=null,faceLM=null,detTick=0,lastDet=0;
 const handFresh=()=>now-handSeen<900, faceFresh=()=>now-faceSeen<900;
 const handNear=()=>handFresh()&&hand.sz>.22;
@@ -106,6 +106,7 @@ function onHand(L){
   const tip=L[8];
   handHist.push({t:now,sz});while(handHist.length&&now-handHist[0].t>400)handHist.shift();
   tipHist.push({t:now,x:tip.x,y:tip.y});while(tipHist.length&&now-tipHist[0].t>1000)tipHist.shift();
+  relHist.push({t:now,x:L[8].x-L[0].x,y:L[8].y-L[0].y});while(relHist.length&&now-relHist[0].t>600)relHist.shift();
   let r=1;
   if(handHist.length>1){const a=handHist[0];if(now-a.t>200)r=sz/Math.max(a.sz,.02)}
   let motion=0;for(let i=1;i<tipHist.length;i++)motion+=Math.abs(tipHist[i].x-tipHist[i-1].x)+Math.abs(tipHist[i].y-tipHist[i-1].y);
@@ -121,22 +122,27 @@ function onHand(L){
   const sI=fs(5,6,7,8),sM=fs(9,10,11,12),sR=fs(13,14,15,16),sP=fs(17,18,19,20);
   const dxg=L[8].x-L[5].x,dyg=L[8].y-L[5].y;
   const sideways=Math.abs(dxg)>Math.abs(dyg)*1.6&&Math.hypot(dxg,dyg)>.05;
-  const nearTemple=face&&faceFresh()&&Math.min(Math.hypot(L[8].x-face.tl.x,L[8].y-face.tl.y),Math.hypot(L[8].x-face.tr.x,L[8].y-face.tr.y))<face.wd*.55;
-  // пистолет: указательный прямой, остальные не вытянуты (можно прижать слабо), и либо палец смотрит почти в камеру, либо большой отведён
+  const faceAlive=!!face&&now-faceSeen<3000,fw=faceAlive?face.wd:1;
+  const dTip=faceAlive?Math.min(Math.hypot(L[8].x-face.tl.x,L[8].y-face.tl.y),Math.hypot(L[8].x-face.tr.x,L[8].y-face.tr.y)):9;
+  const nearTemple=dTip<fw*.45,nearHead=dTip<fw*.85;   // nearTemple: кончик прямо на виске; nearHead: рядом с головой (для кручения)
+  const dIdx=sI-(sM+sR+sP)/3;   // насколько указательный прямее остальных: у кулака ~0, у пистолета заметно больше
+  const twirlActive=twProg>Math.PI*.9&&now-twLast<500;   // идёт настоящее круговое движение, а не просто рука рядом с лицом
+  // пистолет: указательный явно прямее остальных (иначе это кулак), остальные не вытянуты, и либо палец смотрит почти в камеру (кончик не дальше основания), либо большой отведён
   const sT=fs(1,2,3,4),fr2=Math.hypot(dxg,dyg)/Math.max(.02,sz),thumbOut=sT>.7&&Math.hypot(L[4].x-L[5].x,L[4].y-L[5].y)/Math.max(.02,sz)>.55;
-  const gunRaw=!sleeping&&!nearTemple&&sI>.7&&sM<.88&&sR<.88&&sP<.88&&(fr2<.8||thumbOut);
+  const zd=((L[5].z||0)-(L[8].z||0))/Math.max(.02,sz),toCam=fr2<.8&&zd>-.04;
+  const gunRaw=!sleeping&&!twirlActive&&sI>.75&&dIdx>.18&&sM<.9&&sR<.9&&sP<.9&&(toCam||thumbOut);
   if(gunRaw)gunLast=now;
   const gunPose=gunRaw||now-gunLast<350;
-  gunDbg=`указ ${sI.toFixed(2)} сред ${sM.toFixed(2)} безым ${sR.toFixed(2)} мизин ${sP.toFixed(2)} ракурс ${fr2.toFixed(2)} большой ${thumbOut?'да':'нет'} = ${gunPose?'ПИСТОЛЕТ':'нет'}`;
+  gunDbg=`указ ${sI.toFixed(2)} разн ${dIdx.toFixed(2)} сред ${sM.toFixed(2)} безым ${sR.toFixed(2)} мизин ${sP.toFixed(2)} ракурс ${fr2.toFixed(2)} глубина ${zd.toFixed(2)} большой ${thumbOut?'да':'нет'} = ${gunPose?'ПИСТОЛЕТ':'нет'}`;
   if(gunPose){
     if(!gun0)gun0=now;
     if(st==='handsup')go('handsup',1300);
     else if(now-gun0>500&&!['shot','hide','panic','peek','rps','crazy'].includes(st))go('handsup',1300);
   }else gun0=0;
-  // выстрел: резкий взмах пальцем (отдача), пока он стоит с поднятыми руками
-  if(st==='handsup'&&now-st0>1000){
-    const q=tipHist.find(h=>now-h.t<240&&now-h.t>90);
-    if(q){const dsp=Math.hypot(tip.x-q.x,tip.y-q.y);if(dsp>Math.max(.1,.5*sz)&&dsp/((now-q.t)/1000)>.6){go('shot',4000,{d:Math.random()<.5?-1:1});return}}
+  // выстрел: только резкий взмах пальцем (отдача) относительно запястья. Если просто водить рукой, пока палец направлен на него, он не умирает, а следит
+  if(st==='handsup'&&now-st0>1000&&now-gunLast<700){
+    const q=relHist.find(h=>now-h.t<260&&now-h.t>90);
+    if(q){const dsp=Math.hypot(L[8].x-L[0].x-q.x,L[8].y-L[0].y-q.y);if(dsp>Math.max(.1,.5*sz)&&dsp/((now-q.t)/1000)>.6){go('shot',4000,{d:Math.random()<.5?-1:1});return}}
   }
   // --- испуг: настоящая попытка напугать = рука быстро и устойчиво растёт в кадре (или сразу огромная) ---
   let mnx=1,mxx=0,mny=1,mxy=0;
@@ -163,36 +169,37 @@ function onHand(L){
     return;
   }
   // мелкие дёргания и обычные приближения руки его больше не пугают
+  // --- жест «крутит у виска»: указательный у виска делает круги ---
+  if(st==='crazy')return;
+  const rpsWait=st==='rps'&&stArg.phase==='pump'&&!stArg.count;
+  if(faceAlive&&sI>.65&&dIdx>.15&&sM<.9&&sR<.9&&sP<.9&&nearHead){
+    twLast=now;
+    twHist.push({t:now,x:L[8].x,y:L[8].y});while(twHist.length&&now-twHist[0].t>2000)twHist.shift();
+    if(twHist.length>=5){
+      let cx0=0,cy0=0;for(const q of twHist){cx0+=q.x;cy0+=q.y}cx0/=twHist.length;cy0/=twHist.length;
+      let rs=0,acc=0,pa=null,np=0,nn=0;const rr2=[];
+      for(const q of twHist){const r2=Math.hypot(q.x-cx0,q.y-cy0);rs+=r2;rr2.push(r2);const a2=Math.atan2(q.y-cy0,q.x-cx0);if(pa!==null){let d=a2-pa;while(d>Math.PI)d-=2*Math.PI;while(d<-Math.PI)d+=2*Math.PI;acc+=d;if(d>0)np++;else nn++}pa=a2}
+      const rm=rs/twHist.length,rv=Math.sqrt(rr2.reduce((u,v)=>u+(v-rm)*(v-rm),0)/rr2.length);
+      // настоящий круг: почти целый оборот в одну сторону с более-менее ровным радиусом, а не дрожание или взмахи туда-сюда
+      const oneWay=Math.max(np,nn)/Math.max(1,np+nn)>=.7;
+      twProg=rm>.01&&oneWay?Math.abs(acc):0;
+      if(twHist.length>=7&&Math.abs(acc)>Math.PI*1.7&&oneWay&&rm>.01&&rm<.14&&rv<rm*.7&&now-lastCrazy>4500&&(rpsWait||!['rps','handsup','shot','hide','panic'].includes(st))){lastCrazy=now;twHist=[];twProg=0;go('crazy',4300,{},true);return}
+    }else twProg=0;
+  }else if(now-twLast>700){twHist=[];twProg=0}
   // --- классификация жеста для цу-е-фа ---
   const ex8=s2=>s2>.8,cu8=s2=>s2<.74;
-  const upose=(cu8(sI)&&cu8(sM)&&cu8(sR)&&cu8(sP))?'rock':(ex8(sI)&&ex8(sM)&&ex8(sR)&&ex8(sP))?'paper':(ex8(sI)&&ex8(sM)&&cu8(sR)&&cu8(sP))?'scissors':null;
+  const mxS=Math.max(sI,sM,sR,sP),avS=(sI+sM+sR+sP)/4;
+  const rockLike=((cu8(sI)&&cu8(sM)&&cu8(sR)&&cu8(sP))||(mxS<.82&&avS<.62&&dIdx<.2))&&!(sI>.62&&dIdx>.15);   // второе условие ловит кулак, направленный в камеру; указательный заметно прямее остальных это уже не кулак
+  const upose=rockLike?'rock':(ex8(sI)&&ex8(sM)&&ex8(sR)&&ex8(sP))?'paper':(ex8(sI)&&ex8(sM)&&cu8(sR)&&cu8(sP))?'scissors':null;
   poseHist.push({t:now,p:upose});while(poseHist.length&&now-poseHist[0].t>1800)poseHist.shift();
   ycHist.push({t:now,y:(L[0].y+L[9].y)/2});while(ycHist.length&&now-ycHist[0].t>1500)ycHist.shift();
   handDbg=`размах ${scale.toFixed(2)} рост ${gr.toFixed(2)} поза ${upose||'-'}`;
-  if(upose==='rock'&&!nearTemple){if(!rock0)rock0=now}else rock0=0;
+  // игра начинается только с спокойного кулака: не у виска, не во время кручения и не пистолет
+  if(upose==='rock'&&!nearTemple&&!twirlActive&&!gunPose&&hand.motion<.35){if(!rock0)rock0=now}else rock0=0;
   if(rock0&&now-rock0>600&&now-lastRps>3500&&!['rps','handsup','shot','crazy','hide','panic','peek','spin','exit','wake','startle'].includes(st)){
     rock0=0;go('rps',16000,{phase:'pump',count:0,tb:now,period:1});
   }
   if(st==='rps'){if(stArg.phase==='pump'&&rpsPump())rpsBeat();return}
-  // --- жест «крутит у виска»: указательный у виска делает круги ---
-  if(st==='crazy')return;
-  if(face&&faceFresh()&&sI>.72&&sM<.72&&sR<.72&&sP<.72){
-    const tp=L[8],dT=Math.min(Math.hypot(tp.x-face.tl.x,tp.y-face.tl.y),Math.hypot(tp.x-face.tr.x,tp.y-face.tr.y));
-    if(dT<face.wd*.5){
-      twLast=now;
-      twHist.push({t:now,x:tp.x,y:tp.y});while(twHist.length&&now-twHist[0].t>1800)twHist.shift();
-      if(twHist.length>=8){
-        let cx0=0,cy0=0;for(const q of twHist){cx0+=q.x;cy0+=q.y}cx0/=twHist.length;cy0/=twHist.length;
-        let rs=0,acc=0,pa=null,np=0,nn=0;const rr2=[];
-        for(const q of twHist){const r2=Math.hypot(q.x-cx0,q.y-cy0);rs+=r2;rr2.push(r2);const a2=Math.atan2(q.y-cy0,q.x-cx0);if(pa!==null){let d=a2-pa;while(d>Math.PI)d-=2*Math.PI;while(d<-Math.PI)d+=2*Math.PI;acc+=d;if(d>0)np++;else nn++}pa=a2}
-        const rm=rs/twHist.length,rv=Math.sqrt(rr2.reduce((u,v)=>u+(v-rm)*(v-rm),0)/rr2.length);
-        // настоящий круг: больше полутора оборотов в одну сторону, ровный радиус, а не дрожание или взмахи
-        const oneWay=Math.max(np,nn)/Math.max(1,np+nn)>=.75;
-        if(Math.abs(acc)>Math.PI*2.2&&oneWay&&rm>.01&&rm<.09&&rv<rm*.6&&now-lastCrazy>4500&&!['rps','handsup','shot','hide','panic'].includes(st)){lastCrazy=now;twHist=[];go('crazy',4300,{})}
-      }
-    }else if(now-twLast>250)twHist=[];
-  }else if(now-twLast>250)twHist=[];
-  
   // палец указывает в сторону: существо уходит за край экрана
   const ext=(a,b,c)=>Math.hypot(L[a].x-L[c].x,L[a].y-L[c].y)>Math.hypot(L[b].x-L[c].x,L[b].y-L[c].y)*1.15;
   const dxp=L[8].x-L[5].x,dyp=L[8].y-L[5].y;
@@ -622,8 +629,8 @@ function beh(t){
   case 'handsup':{
     const fg=faceFresh()?face:null;
     S('sad',{eye:1.2,brow:-1,lift:.7,curve:-.6,w:.7,shake:.7,oy:.02,arms:1});
-    if(fg){tx=fg.gx;ty=fg.gy}else{tx=0;ty=0}
-    spd=.2;
+    if(handFresh()){tx=(.5-hand.x)*2.2;ty=(hand.y-.5)*2.2;gk=.32}else if(fg){tx=fg.gx;ty=fg.gy}else{tx=0;ty=0}
+    spd=.3;
     if(!stArg.i){stArg.i=1;seq([520,480,440],.18,'sine',.12,.3,14)}
     if(now-(stArg.ts||0)>1700){stArg.ts=now;tone(560,380,.9,'sine',.1,16)}
     break}
